@@ -119,7 +119,68 @@ Toàn bộ kết quả suy luận cùng thông số chi tiết của pipeline ti
 
 ---
 
-## 4. Cấu trúc Thư mục Dự án
+## 4. Huấn luyện Fine-Tuning Pipeline (Phần 6)
+
+Mô hình hỗ trợ 2 chiến lược fine-tuning linh hoạt:
+1. **Frozen Vision ViT (`frozen_vision`):** Đóng băng 86M tham số của Vision Transformer, chỉ huấn luyện 138M tham số của Text Decoder. Tiết kiệm VRAM, huấn luyện nhanh trên GPU nhỏ.
+2. **Full Fine-Tuning (`full_finetune`):** Huấn luyện toàn bộ mô hình với **Differential Learning Rate** (ViT học với $\text{LR} = 5 \times 10^{-6}$, Decoder học với $\text{LR} = 5 \times 10^{-5}$) để tránh catastrophic forgetting các đặc trưng thị giác cốt lõi.
+
+### 4.1. Lệnh chạy Huấn luyện (Command Line Interface)
+```bash
+# Huấn luyện chiến lược Frozen Vision (Khuyên dùng khi bắt đầu)
+python src/train.py --strategy frozen_vision --epochs 5 --batch_size 16 --learning_rate 5e-5
+
+# Huấn luyện Full Fine-Tuning (Differential LR cho ViT & Decoder)
+python src/train.py --strategy full_finetune --epochs 5 --batch_size 16 --learning_rate 5e-5 --lr_vision 5e-6 --weight_decay 0.05
+```
+
+### 4.2. Các siêu tham số cho phép cấu hình (Hyperparameters)
+| Tham số | Ý nghĩa | Mặc định |
+| :--- | :--- | :--- |
+| `--strategy` | Chiến lược huấn luyện (`frozen_vision` hoặc `full_finetune`) | `frozen_vision` |
+| `--epochs` | Số lượng epoch huấn luyện | `5` |
+| `--batch_size` | Kích thước batch | `16` |
+| `--learning_rate` | Tốc độ học của Language Decoder | `5e-5` |
+| `--lr_vision` | Tốc độ học của Vision Encoder (khi full fine-tune) | `5e-6` |
+| `--max_length` | Độ dài tối đa của caption tokens | `32` |
+| `--weight_decay` | Hệ số suy giảm trọng số (AdamW) | `0.05` |
+| `--mixed_precision` | Kích hoạt tự động FP16 (AMP) trên GPU | `True` |
+
+### 4.3. Logging và Quản lý Checkpoint
+- **Training Logs:** Quá trình huấn luyện tự động ghi lại loss theo từng step và epoch vào:
+  * `logs/training_log_<strategy>.json`
+  * `logs/training_log_<strategy>.csv`
+- **Best Checkpoint:** Sau mỗi epoch validation, nếu validation loss đạt kỷ lục thấp nhất mới, mô hình sẽ tự động lưu trọng số tốt nhất vào:
+  * `checkpoints/<strategy>/best_model/`
+
+---
+
+## 5. Đánh giá Định lượng (Evaluation Pipeline)
+
+Chạy script đánh giá trên toàn bộ 1,000 ảnh tập Flickr8k Test Set đối chiếu với 5 reference captions:
+```bash
+# Đánh giá mô hình Pretrained gốc (Baseline Zero-Shot)
+python src/evaluate.py --model_type pretrained
+
+# Đánh giá mô hình đã Fine-tune
+python src/evaluate.py --model_path checkpoints/frozen_vision/best_model
+```
+
+---
+
+## 6. Vẽ Biểu đồ Hội tụ & Visual Grounding (Visualizer)
+
+```bash
+# Vẽ đường cong Training Loss & Validation Loss từ log
+python src/visualizer.py --plot_loss logs/training_log_frozen_vision.json
+
+# Tạo bản đồ chú ý thị giác Cross-Attention Heatmaps
+python src/visualizer.py --image data/flickr8k/Images/1000268201_693b08cb0e.jpg
+```
+
+---
+
+## 7. Cấu trúc Thư mục Dự án
 
 ```text
 btl-computer-vision/
@@ -158,7 +219,7 @@ btl-computer-vision/
 
 ---
 
-## 5. Kết quả Thực nghiệm Định lượng Tham chiếu
+## 8. Kết quả Thực nghiệm Định lượng Tham chiếu
 
 Đánh giá trên tập **Flickr8k Test Set** (1,000 ảnh, 5 reference captions/ảnh):
 
@@ -170,7 +231,7 @@ btl-computer-vision/
 
 ---
 
-## 6. Khởi chạy Ứng dụng Demo Streamlit
+## 9. Khởi chạy Ứng dụng Demo Streamlit
 
 ```bash
 streamlit run app/app.py
@@ -180,3 +241,4 @@ Giao diện cung cấp:
 - Sinh caption tức thì kèm đồng hồ đo độ trễ suy luận ($\text{ms}$).
 - Trực quan hóa **Visual Attention Heatmap** cho từng từ khóa để kiểm tra vùng thị giác được Vision Encoder chú ý.
 - Bảng và biểu đồ so sánh chỉ số BLEU, METEOR, ROUGE-L.
+
