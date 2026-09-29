@@ -1,0 +1,4 @@
+Image Path:        C:\Users\BOOK PRO\Downloads\btl computer vision\data\flickr8k\Images\1000268201_693b08cb0e.jpg
+Device:            cpu
+Inference Latency: 21266.91 ms
+Generated Caption: "a little girl standing in front of a chicken coop"
