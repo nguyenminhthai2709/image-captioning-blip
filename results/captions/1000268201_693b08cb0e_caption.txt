@@ -1,0 +1,3 @@
+Image: 1000268201_693b08cb0e.jpg
+Generated Caption: "a little girl standing in front of a chicken coop"
+Inference Latency: 59665.06 ms (cpu)

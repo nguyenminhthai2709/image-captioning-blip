@@ -1,0 +1,51 @@
+{
+    "image_path": "C:\\Users\\BOOK PRO\\Downloads\\btl computer vision\\data\\flickr8k\\Images\\1000268201_693b08cb0e.jpg",
+    "image_name": "1000268201_693b08cb0e.jpg",
+    "generated_caption": "a little girl standing in front of a chicken coop",
+    "latency_ms": 59665.06,
+    "device": "CPU",
+    "decoding_parameters": {
+        "method": "Beam Search",
+        "num_beams": 5,
+        "max_length": 32,
+        "min_length": 5,
+        "repetition_penalty": 1.2
+    },
+    "preprocessing_details": {
+        "Raw Image": {
+            "Dimensions (W x H)": "375 x 500 px",
+            "Color Mode": "RGB",
+            "Aspect Ratio (W/H)": 0.75
+        },
+        "Preprocessed Vision Tensor": {
+            "Target Spatial Resolution": "384 x 384 px",
+            "Interpolation Method": "Bicubic Interpolation",
+            "Tensor Shape (B x C x H x W)": [
+                1,
+                3,
+                384,
+                384
+            ],
+            "Data Type": "torch.float32",
+            "Normalization Parameters": {
+                "Mean (RGB)": [
+                    0.48145466,
+                    0.4578275,
+                    0.40821073
+                ],
+                "Std (RGB)": [
+                    0.26862954,
+                    0.26130258,
+                    0.27577711
+                ]
+            },
+            "Normalized Pixel Range": "[-1.792, 2.146] (Mean: -0.560, Std: 0.809)"
+        },
+        "Vision Transformer Patches": {
+            "Patch Size (P x P)": "16 x 16 px",
+            "Total Visual Patches (N)": "(24 x 24) = 576 patches",
+            "Visual Feature Embedding Dim (D)": 768,
+            "Vision Encoder Output Shape": "(1, 577, 768) including [CLS] token"
+        }
+    }
+}
