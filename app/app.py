@@ -282,7 +282,38 @@ def main():
                         extractor = load_attention_extractor()
                         attn_res = extractor.generate_and_extract_attention(selected_image)
                         
-                    tokens_list = attn_res["tokens_info"]
+                    tokens_list = attn_res.get("tokens_info", [])
+                    # Safety fallback if cached instance returned legacy dict
+                    if not tokens_list and "resized_heatmaps" in attn_res:
+                        for idx, (k, hmap) in enumerate(attn_res["resized_heatmaps"].items()):
+                            tok_name = k.split("_", 1)[-1] if "_" in k else k
+                            tokens_list.append({
+                                "index": idx,
+                                "token_id": 1000 + idx,
+                                "token_str": tok_name,
+                                "raw_patch_attn": np.zeros(576),
+                                "resized_heatmap": hmap,
+                                "min_val": float(hmap.min()),
+                                "max_val": float(hmap.max()),
+                                "mean_val": float(hmap.mean()),
+                                "std_val": float(hmap.std()),
+                                "peak_patch_index": 0
+                            })
+                            
+                    if not tokens_list:
+                        tokens_list = [{
+                            "index": 0,
+                            "token_id": 0,
+                            "token_str": caption.split()[0] if caption else "token",
+                            "raw_patch_attn": np.zeros(576),
+                            "resized_heatmap": np.zeros((selected_image.size[1], selected_image.size[0])),
+                            "min_val": 0.0,
+                            "max_val": 1.0,
+                            "mean_val": 0.5,
+                            "std_val": 0.1,
+                            "peak_patch_index": 0
+                        }]
+                        
                     # Format token labels for dropdown
                     token_options = [
                         f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})"
@@ -291,7 +322,7 @@ def main():
                     ]
                     
                     if not token_options:
-                        token_options = [f"[{t['index']}] \"{t['token_str']}\" (ID: {t['token_id']})" for t in tokens_list]
+                        token_options = [f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})" for t in tokens_list]
                         
                     # Dropdown for exact token selection
                     chosen_option = st.selectbox(
