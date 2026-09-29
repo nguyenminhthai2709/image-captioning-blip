@@ -275,40 +275,92 @@ def main():
                     # Visual Grounding / Attention Map Section
                     # ---------------------------------------------------------
                     st.markdown("---")
-                    st.subheader("3. 🎯 Visual Grounding: Cross-Attention Heatmap")
-                    st.caption("Xem vùng ảnh được mô hình tập trung năng lượng thị giác khi sinh từng từ cụ thể:")
+                    st.subheader("3. 🎯 Visual Grounding: Cross-Attention Heatmap (Debug & Analysis)")
+                    st.caption("Trích xuất trực tiếp trọng số **Cross-Attention** từ Text Decoder lên $576$ patches ($24 \\times 24$) của Vision Encoder:")
                     
-                    words = [w.strip(".,!?\"'") for w in caption.split() if len(w.strip(".,!?\"'")) > 0]
-                    if words:
-                        selected_word = st.selectbox(
-                            "Chọn từ vựng để phân tích vùng kích hoạt:",
-                            words,
-                            index=min(1, len(words) - 1)
+                    with st.spinner("Đang tính toán Cross-Attention cho từng token..."):
+                        extractor = load_attention_extractor()
+                        attn_res = extractor.generate_and_extract_attention(selected_image)
+                        
+                    tokens_list = attn_res["tokens_info"]
+                    # Format token labels for dropdown
+                    token_options = [
+                        f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})"
+                        for t in tokens_list
+                        if t['token_str'] not in ("[CLS]", "[SEP]", "[PAD]", "")
+                    ]
+                    
+                    if not token_options:
+                        token_options = [f"[{t['index']}] \"{t['token_str']}\" (ID: {t['token_id']})" for t in tokens_list]
+                        
+                    # Dropdown for exact token selection
+                    chosen_option = st.selectbox(
+                        "🔍 Chọn Token / Từ vựng để kiểm tra vùng thị giác được kích hoạt:",
+                        token_options,
+                        index=min(1, len(token_options) - 1)
+                    )
+                    
+                    # Extract index from label "[idx] ..."
+                    chosen_idx = int(chosen_option.split("]")[0].replace("[", "").strip())
+                    selected_token_data = tokens_list[chosen_idx]
+                    
+                    # Overlay heatmap
+                    overlay = BLIPAttentionExtractor.overlay_heatmap_on_image(
+                        selected_image,
+                        selected_token_data["resized_heatmap"],
+                        alpha=0.55,
+                        colormap="jet"
+                    )
+                    
+                    col_v1, col_v2 = st.columns(2)
+                    with col_v1:
+                        st.image(selected_image, caption=f"Ảnh gốc ({selected_image.size[0]} x {selected_image.size[1]} px)", use_container_width=True)
+                    with col_v2:
+                        st.image(
+                            overlay,
+                            caption=f"Vùng kích hoạt cho Token: \"{selected_token_data['token_str']}\" (ID: {selected_token_data['token_id']})",
+                            use_container_width=True
                         )
                         
-                        if selected_word:
-                            with st.spinner("Đang trích xuất Cross-Attention..."):
-                                extractor = load_attention_extractor()
-                                attn_res = extractor.generate_and_extract_attention(selected_image)
-                                
-                                # Find corresponding token heatmap
-                                found_heatmap = None
-                                for k, hmap in attn_res["resized_heatmaps"].items():
-                                    if selected_word.lower() in k.lower():
-                                        found_heatmap = hmap
-                                        break
-                                if found_heatmap is None and len(attn_res["resized_heatmaps"]) > 0:
-                                    found_heatmap = list(attn_res["resized_heatmaps"].values())[0]
-                                    
-                                overlay = BLIPAttentionExtractor.overlay_heatmap_on_image(
-                                    selected_image, found_heatmap, alpha=0.55, colormap="jet"
-                                )
-                                
-                                col_v1, col_v2 = st.columns(2)
-                                with col_v1:
-                                    st.image(selected_image, caption="Ảnh gốc", use_container_width=True)
-                                with col_v2:
-                                    st.image(overlay, caption=f"Vùng chú ý cho từ: \"{selected_word}\"", use_container_width=True)
+                    # ---------------------------------------------------------
+                    # DEBUG & VERIFICATION PANEL
+                    # ---------------------------------------------------------
+                    with st.expander("🛠️ Xem Thông Số Debug & Kiểm Tra Phân Biệt Attention (Debug Analytics)", expanded=True):
+                        st.markdown(f"**Generated Caption:** `{caption}`")
+                        
+                        col_d1, col_d2, col_d3 = st.columns(3)
+                        with col_d1:
+                            st.write(f"• **Selected Token:** `{selected_token_data['token_str']}`")
+                            st.write(f"• **Token ID:** `{selected_token_data['token_id']}` (Index: {selected_token_data['index']})")
+                        with col_d2:
+                            st.write(f"• **Raw Attention Shape:** `{attn_res['raw_attn_shape']}`")
+                            st.write(f"• **Spatial Patch Shape:** `[576] -> [24, 24]`")
+                        with col_d3:
+                            st.write(f"• **Attention Min / Max:** `{selected_token_data['min_val']:.5f}` / `{selected_token_data['max_val']:.5f}`")
+                            st.write(f"• **Peak Patch Index:** `#{selected_token_data['peak_patch_index']}` (Vùng sáng nhất)")
+
+                        # Compare with other tokens in the same caption
+                        st.markdown("**Độ Khác Biệt Giữa Các Token (Dissimilarity Matrix):**")
+                        diff_rows = []
+                        current_vec = selected_token_data["raw_patch_attn"]
+                        
+                        for other_t in tokens_list:
+                            if other_t["token_str"] in ("[CLS]", "[SEP]", "[PAD]", ""):
+                                continue
+                            if other_t["index"] == chosen_idx:
+                                continue
+                            other_vec = other_t["raw_patch_attn"]
+                            l2_d = float(np.linalg.norm(current_vec - other_vec))
+                            cos_sim = float(np.dot(current_vec, other_vec) / (np.linalg.norm(current_vec) * np.linalg.norm(other_vec) + 1e-8))
+                            diff_rows.append({
+                                "So Sánh Token": f"\"{selected_token_data['token_str']}\" vs \"{other_t['token_str']}\" (ID: {other_t['token_id']})",
+                                "Khoảng cách L2": f"{l2_d:.5f}",
+                                "Cosine Similarity": f"{cos_sim:.5f}",
+                                "Trạng Thái": "✅ Khác biệt rõ ràng" if l2_d > 1e-4 else "Trùng lặp"
+                            })
+                            
+                        if diff_rows:
+                            st.table(diff_rows)
             else:
                 st.info("👈 Hãy tải ảnh hoặc chọn ảnh mẫu ở cột bên trái để bắt đầu.")
 
