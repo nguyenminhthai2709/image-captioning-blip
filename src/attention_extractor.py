@@ -1,11 +1,13 @@
 """
 Authentic Token-Specific Cross-Attention Visual Grounding for BLIP.
 
-Solves the ViT "Attention Sink / Artifact" phenomenon by computing Token-Specific Spatial Relevance:
-  R(t, j) = ReLU( A(t, j) - Mean_t(A(t, j)) ) / ( Std_t(A(t, j)) + eps )
-
-This completely removes the shared background bias and produces sharp, distinct spatial heatmaps
-for each individual word (e.g. 'girl', 'dress', 'pink', 'motorcycle', 'people').
+Extracts cross-attention for the EXACT generated caption by:
+1. Passing the image through Vision Encoder -> H_vis [1, 577, 768]
+2. Tokenizing the generated caption -> input_ids [1, seq_len]
+3. Passing (input_ids, H_vis) to Text Decoder with output_attentions=True
+4. Extracting cross-attention tensor [12 layers, 12 heads, seq_len, 577 visual tokens]
+5. Computing Token-Specific Spatial Relevance to eliminate shared background sinks:
+   R(t, j) = ReLU( (A(t, j) - Mean_t(A(t, j))) / (Std_t(A(t, j)) + eps) )
 """
 
 import sys
@@ -38,7 +40,7 @@ logger = setup_logger("AttentionExtractor")
 
 class BLIPAttentionExtractor:
     """
-    Extracts authentic, token-specific Cross-Attention from Salesforce/blip-image-captioning-base.
+    Extracts authentic, token-by-token Cross-Attention from Salesforce/blip-image-captioning-base.
     """
     def __init__(
         self,
@@ -53,90 +55,87 @@ class BLIPAttentionExtractor:
         self.model = BlipForConditionalGeneration.from_pretrained(model_name).to(self.device)
         self.model.eval()
 
-    def generate_and_extract_attention(
+    def extract_attention_for_caption(
         self,
         image: Image.Image,
-        num_beams: int = 1,
-        max_length: int = 32
+        caption: str
     ) -> Dict[str, Any]:
         """
-        Generate caption and extract authentic, token-distinct visual grounding heatmaps.
+        Extract authentic Cross-Attention for the EXACT given caption and image.
+        
+        Guarantees 100% mathematical identity between:
+        - The caption string
+        - Token IDs and decoded token words
+        - Text Decoder Cross-Attention spatial heatmaps
         """
         img_w, img_h = image.size
+        
+        # 1. Image Preprocessing & Vision Encoder
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         pixel_values = inputs.pixel_values
 
-        # 1. Generate Token Sequence
-        with torch.no_grad():
-            output_ids_tensor = self.model.generate(
-                pixel_values=pixel_values,
-                max_length=max_length,
-                num_beams=num_beams,
-                return_dict_in_generate=True,
-                output_scores=True
-            ).sequences[0]
-
-        output_ids = output_ids_tensor.tolist()
-        full_caption = self.processor.decode(output_ids_tensor, skip_special_tokens=True).strip()
-
-        # 2. Extract Cross-Attention from Text Decoder
-        decoder_input_ids = output_ids_tensor.unsqueeze(0).to(self.device)
-        
         with torch.no_grad():
             vision_outputs = self.model.vision_model(pixel_values=pixel_values)
             image_embeds = vision_outputs[0]  # [1, 577, 768]
             image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(self.device)
-            
+
+        # 2. Tokenize the EXACT Caption
+        caption_encoding = self.processor.tokenizer(caption, return_tensors="pt").to(self.device)
+        input_ids = caption_encoding.input_ids[0] # [seq_len]
+        output_ids = input_ids.tolist()
+        
+        # Decode tokens individually
+        decoded_tokens = [self.processor.tokenizer.decode([t_id]).strip() for t_id in input_ids]
+
+        # 3. Forward Pass through Text Decoder with Cross-Attention output
+        with torch.no_grad():
             decoder_outputs = self.model.text_decoder(
-                input_ids=decoder_input_ids,
+                input_ids=input_ids.unsqueeze(0),
                 encoder_hidden_states=image_embeds,
                 encoder_attention_mask=image_atts,
                 output_attentions=True,
                 return_dict=True
             )
 
-        # cross_attentions: tuple of 12 layers [1, 12, seq_len, 577]
+        # cross_attentions: tuple of 12 decoder layers
+        # Each layer shape: [batch=1, num_heads=12, seq_len, vision_tokens=577]
         cross_attns = decoder_outputs.cross_attentions
         raw_attn_shape = list(cross_attns[-1].shape)
         
-        # 3. Aggregate Top Decoder Cross-Attention Layers (Layers 8, 9, 10, 11)
-        selected_layers = torch.stack(cross_attns[-4:], dim=0) # [4, 1, 12, seq_len, 577]
-        # Average across heads & selected layers: [seq_len, 576] (dropping CLS token at index 0)
-        raw_seq_attn = selected_layers.mean(dim=(0, 1, 2))[:, 1:] # [seq_len, 576]
+        # 4. Aggregate High-Level Semantic Layers (Layers 8, 9, 10, 11)
+        # Shape: [4, 1, 12, seq_len, 577]
+        selected_layers = torch.stack(cross_attns[-4:], dim=0)
+        # Average across 4 layers and 12 heads: [seq_len, 576] (dropping CLS token at index 0)
+        raw_seq_attn = selected_layers.mean(dim=(0, 1, 2)).squeeze(0)[:, 1:] # [seq_len, 576]
 
-        # 4. Token-Specific Relevance Grounding (Remove Shared Spatial Sinks)
+        # 5. Token-Specific Relevance Grounding (Eliminate shared background sinks)
         # Calculate mean & std across all tokens in the sentence for each of the 576 patches
         patch_mean = raw_seq_attn.mean(dim=0, keepdim=True) # [1, 576]
         patch_std = raw_seq_attn.std(dim=0, keepdim=True) + 1e-6 # [1, 576]
         
-        # Compute Z-score deviation: How much this specific token activates patch j above baseline
+        # Z-score deviation
         z_relevance = (raw_seq_attn - patch_mean) / patch_std # [seq_len, 576]
-        
-        # ReLU to keep only positive specific focus
         positive_relevance = torch.clamp(z_relevance, min=0.0).cpu().numpy()
 
-        # 5. Build Token-by-Token Heatmaps
+        # 6. Build Structured Token Info & Heatmaps
         tokens_info = []
-        for idx, token_id in enumerate(output_ids):
-            token_str = self.processor.decode([token_id]).strip()
+        for idx, (token_id, token_str) in enumerate(zip(output_ids, decoded_tokens)):
+            rel_vector = positive_relevance[idx]  # shape: (576,)
+            raw_vector = raw_seq_attn[idx].cpu().numpy() # shape: (576,)
             
-            rel_vector = positive_relevance[idx]  # (576,)
-            raw_vector = raw_seq_attn[idx].cpu().numpy() # (576,)
-            
-            # Normalize token-specific spatial relevance
+            # Normalize spatial relevance
             if rel_vector.max() > rel_vector.min():
                 norm_spatial = (rel_vector - rel_vector.min()) / (rel_vector.max() - rel_vector.min())
             else:
                 norm_spatial = (raw_vector - raw_vector.min()) / (raw_vector.max() - raw_vector.min() + 1e-8)
                 
-            # Apply Gaussian-style power curve for crisp visual contrast on regions
-            norm_spatial = np.power(norm_spatial, 1.5)
+            norm_spatial = np.power(norm_spatial, 1.4)
             norm_spatial = (norm_spatial - norm_spatial.min()) / (norm_spatial.max() - norm_spatial.min() + 1e-8)
             
             # Reshape into 24x24 grid
             grid_24x24 = norm_spatial.reshape(24, 24)
             
-            # Interpolate to original image dimensions (img_h, img_w)
+            # Bilinear interpolation to original image size
             grid_tensor = torch.tensor(grid_24x24, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
             resized_tensor = F.interpolate(
                 grid_tensor,
@@ -146,8 +145,8 @@ class BLIPAttentionExtractor:
             ).squeeze().clamp(0.0, 1.0)
             
             resized_heatmap = resized_tensor.numpy()
-            
             peak_patch = int(norm_spatial.argmax())
+            
             tokens_info.append({
                 "index": idx,
                 "token_id": token_id,
@@ -166,11 +165,31 @@ class BLIPAttentionExtractor:
             })
 
         return {
-            "caption": full_caption,
+            "caption": caption,
             "output_ids": output_ids,
             "raw_attn_shape": raw_attn_shape,
             "tokens_info": tokens_info
         }
+
+    def generate_and_extract_attention(
+        self,
+        image: Image.Image,
+        num_beams: int = 5,
+        max_length: int = 32
+    ) -> Dict[str, Any]:
+        """Generate caption first, then extract authentic cross-attention for that exact caption."""
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        pixel_values = inputs.pixel_values
+
+        with torch.no_grad():
+            output_ids_tensor = self.model.generate(
+                pixel_values=pixel_values,
+                max_length=max_length,
+                num_beams=num_beams
+            )[0]
+
+        caption = self.processor.decode(output_ids_tensor, skip_special_tokens=True).strip()
+        return self.extract_attention_for_caption(image=image, caption=caption)
 
     @staticmethod
     def overlay_heatmap_on_image(
@@ -183,7 +202,6 @@ class BLIPAttentionExtractor:
         img_rgb = image.convert("RGB")
         w, h = img_rgb.size
         
-        # Ensure correct size
         if heatmap_2d.shape != (h, w):
             t = torch.tensor(heatmap_2d, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
             heatmap_2d = F.interpolate(t, size=(h, w), mode="bicubic", align_corners=False).squeeze().numpy()

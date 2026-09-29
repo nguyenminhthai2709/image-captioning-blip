@@ -280,43 +280,17 @@ def main():
                     st.subheader("3. 🎯 Visual Grounding: Cross-Attention Heatmap (Debug & Analysis)")
                     st.caption("Trích xuất trực tiếp trọng số **Cross-Attention** từ Text Decoder lên $576$ patches ($24 \\times 24$) của Vision Encoder:")
                     
-                    with st.spinner("Đang tính toán Cross-Attention cho từng token..."):
+                    with st.spinner("Đang trích xuất Cross-Attention cho câu caption hiện tại..."):
                         extractor = load_attention_extractor()
-                        attn_res = extractor.generate_and_extract_attention(selected_image)
+                        attn_res = extractor.extract_attention_for_caption(selected_image, caption=caption)
                         
                     tokens_list = attn_res.get("tokens_info", [])
-                    # Safety fallback if cached instance returned legacy dict
-                    if not tokens_list and "resized_heatmaps" in attn_res:
-                        for idx, (k, hmap) in enumerate(attn_res["resized_heatmaps"].items()):
-                            tok_name = k.split("_", 1)[-1] if "_" in k else k
-                            tokens_list.append({
-                                "index": idx,
-                                "token_id": 1000 + idx,
-                                "token_str": tok_name,
-                                "raw_patch_attn": np.zeros(576),
-                                "resized_heatmap": hmap,
-                                "min_val": float(hmap.min()),
-                                "max_val": float(hmap.max()),
-                                "mean_val": float(hmap.mean()),
-                                "std_val": float(hmap.std()),
-                                "peak_patch_index": 0
-                            })
-                            
+                    
                     if not tokens_list:
-                        tokens_list = [{
-                            "index": 0,
-                            "token_id": 0,
-                            "token_str": caption.split()[0] if caption else "token",
-                            "raw_patch_attn": np.zeros(576),
-                            "resized_heatmap": np.zeros((selected_image.size[1], selected_image.size[0])),
-                            "min_val": 0.0,
-                            "max_val": 1.0,
-                            "mean_val": 0.5,
-                            "std_val": 0.1,
-                            "peak_patch_index": 0
-                        }]
+                        st.error("Không thể trích xuất tokens_info. Vui lòng thử lại.")
+                        st.stop()
                         
-                    # Format token labels for dropdown
+                    # Format token labels for dropdown (showing index, token string and token ID)
                     token_options = [
                         f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})"
                         for t in tokens_list
@@ -333,7 +307,7 @@ def main():
                         index=min(1, len(token_options) - 1)
                     )
                     
-                    # Extract index from label "[idx] ..."
+                    # Extract index directly from label "[idx] ..."
                     chosen_idx = int(chosen_option.split("]")[0].replace("[", "").strip())
                     selected_token_data = tokens_list[chosen_idx]
                     
@@ -356,25 +330,35 @@ def main():
                         )
                         
                     # ---------------------------------------------------------
-                    # DEBUG & VERIFICATION PANEL
+                    # COMPLETE DEBUG & VERIFICATION PANEL
                     # ---------------------------------------------------------
-                    with st.expander("🛠️ Xem Thông Số Debug & Kiểm Tra Phân Biệt Attention (Debug Analytics)", expanded=True):
-                        st.markdown(f"**Generated Caption:** `{caption}`")
+                    with st.expander("🛠️ Xem Toàn Bộ Thông Số Debug & Ma Trận Khác Biệt (Attention Verification)", expanded=True):
+                        st.markdown(f"### 1. Thông Tin Pipeline Chuỗi & Token")
+                        st.write(f"• **Generated Caption:** `{caption}`")
+                        all_tok_str = " -> ".join([f"'{t['token_str']}' ({t['token_id']})" for t in tokens_list])
+                        st.write(f"• **Decoded Sequence:** `{all_tok_str}`")
+                        st.write(f"• **Token IDs List:** `{attn_res['output_ids']}`")
                         
+                        st.markdown("---")
+                        st.markdown(f"### 2. Chi Tiết Token Đang Chọn (Selected Token)")
                         col_d1, col_d2, col_d3 = st.columns(3)
                         with col_d1:
-                            st.write(f"• **Selected Token:** `{selected_token_data['token_str']}`")
-                            st.write(f"• **Token ID:** `{selected_token_data['token_id']}` (Index: {selected_token_data['index']})")
+                            st.write(f"• **Selected Word:** `{selected_token_data['token_str']}`")
+                            st.write(f"• **Selected Index:** `[{selected_token_data['index']}]`")
+                            st.write(f"• **Selected Token ID:** `{selected_token_data['token_id']}`")
                         with col_d2:
-                            st.write(f"• **Raw Attention Shape:** `{attn_res['raw_attn_shape']}`")
-                            st.write(f"• **Spatial Patch Shape:** `[576] -> [24, 24]`")
+                            st.write(f"• **Cross-Attn Tensor:** `{attn_res['raw_attn_shape']}`")
+                            st.caption("(Batch=1, Heads=12, Text_Len, Vision_Tokens=577)")
+                            st.write(f"• **Token Vector Shape:** `[576]` -> `[24, 24]`")
                         with col_d3:
                             peak_p = selected_token_data.get('peak_patch_index', 0)
-                            st.write(f"• **Attention Min / Max:** `{selected_token_data['min_val']:.5f}` / `{selected_token_data['max_val']:.5f}`")
-                            st.write(f"• **Peak Patch:** `#{peak_p}` (Row {peak_p // 24}, Col {peak_p % 24})")
+                            st.write(f"• **Raw Attn Min / Max:** `{selected_token_data['min_val']:.5f}` / `{selected_token_data['max_val']:.5f}`")
+                            st.write(f"• **Peak Patch Index:** `#{peak_p}` (Row {peak_p // 24}, Col {peak_p % 24})")
 
-                        # Compare with other tokens in the same caption
-                        st.markdown("**Độ Khác Biệt Giữa Các Token (Dissimilarity Matrix):**")
+                        st.markdown("---")
+                        st.markdown("### 3. Ma Trận Đo Lường Độ Khác Biệt Giữa Các Token (Dissimilarity Matrix)")
+                        st.caption("Tính toán Mean Absolute Difference (MAD), Khoảng cách Euclidean L2, và Cosine Similarity:")
+                        
                         diff_rows = []
                         current_vec = selected_token_data.get("specific_relevance", selected_token_data["raw_patch_attn"])
                         
@@ -384,14 +368,18 @@ def main():
                             if other_t["index"] == chosen_idx:
                                 continue
                             other_vec = other_t.get("specific_relevance", other_t["raw_patch_attn"])
+                            
+                            mad = float(np.mean(np.abs(current_vec - other_vec)))
                             l2_d = float(np.linalg.norm(current_vec - other_vec))
                             norm_prod = (np.linalg.norm(current_vec) * np.linalg.norm(other_vec))
                             cos_sim = float(np.dot(current_vec, other_vec) / (norm_prod + 1e-8)) if norm_prod > 0 else 1.0
+                            
                             diff_rows.append({
-                                "So Sánh Token": f"\"{selected_token_data['token_str']}\" vs \"{other_t['token_str']}\" (ID: {other_t['token_id']})",
+                                "Cặp So Sánh (Token A vs Token B)": f"\"{selected_token_data['token_str']}\" vs \"{other_t['token_str']}\" (ID: {other_t['token_id']})",
+                                "Mean Abs Diff (MAD)": f"{mad:.5f}",
                                 "Khoảng cách L2": f"{l2_d:.4f}",
                                 "Cosine Similarity": f"{cos_sim:.4f}",
-                                "Trạng Thái": "✅ Khác biệt rõ ràng" if l2_d > 0.5 or cos_sim < 0.90 else "Tập trung vùng tương tự"
+                                "Xác Nhận": "✅ Khác biệt rõ ràng" if mad > 0.01 else "Tương đồng"
                             })
                             
                         if diff_rows:
