@@ -369,27 +369,29 @@ def main():
                             st.write(f"• **Raw Attention Shape:** `{attn_res['raw_attn_shape']}`")
                             st.write(f"• **Spatial Patch Shape:** `[576] -> [24, 24]`")
                         with col_d3:
+                            peak_p = selected_token_data.get('peak_patch_index', 0)
                             st.write(f"• **Attention Min / Max:** `{selected_token_data['min_val']:.5f}` / `{selected_token_data['max_val']:.5f}`")
-                            st.write(f"• **Peak Patch Index:** `#{selected_token_data['peak_patch_index']}` (Vùng sáng nhất)")
+                            st.write(f"• **Peak Patch:** `#{peak_p}` (Row {peak_p // 24}, Col {peak_p % 24})")
 
                         # Compare with other tokens in the same caption
                         st.markdown("**Độ Khác Biệt Giữa Các Token (Dissimilarity Matrix):**")
                         diff_rows = []
-                        current_vec = selected_token_data["raw_patch_attn"]
+                        current_vec = selected_token_data.get("specific_relevance", selected_token_data["raw_patch_attn"])
                         
                         for other_t in tokens_list:
                             if other_t["token_str"] in ("[CLS]", "[SEP]", "[PAD]", ""):
                                 continue
                             if other_t["index"] == chosen_idx:
                                 continue
-                            other_vec = other_t["raw_patch_attn"]
+                            other_vec = other_t.get("specific_relevance", other_t["raw_patch_attn"])
                             l2_d = float(np.linalg.norm(current_vec - other_vec))
-                            cos_sim = float(np.dot(current_vec, other_vec) / (np.linalg.norm(current_vec) * np.linalg.norm(other_vec) + 1e-8))
+                            norm_prod = (np.linalg.norm(current_vec) * np.linalg.norm(other_vec))
+                            cos_sim = float(np.dot(current_vec, other_vec) / (norm_prod + 1e-8)) if norm_prod > 0 else 1.0
                             diff_rows.append({
                                 "So Sánh Token": f"\"{selected_token_data['token_str']}\" vs \"{other_t['token_str']}\" (ID: {other_t['token_id']})",
-                                "Khoảng cách L2": f"{l2_d:.5f}",
-                                "Cosine Similarity": f"{cos_sim:.5f}",
-                                "Trạng Thái": "✅ Khác biệt rõ ràng" if l2_d > 1e-4 else "Trùng lặp"
+                                "Khoảng cách L2": f"{l2_d:.4f}",
+                                "Cosine Similarity": f"{cos_sim:.4f}",
+                                "Trạng Thái": "✅ Khác biệt rõ ràng" if l2_d > 0.5 or cos_sim < 0.90 else "Tập trung vùng tương tự"
                             })
                             
                         if diff_rows:

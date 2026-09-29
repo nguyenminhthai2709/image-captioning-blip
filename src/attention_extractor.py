@@ -1,13 +1,11 @@
 """
-Authentic Cross-Attention Visual Grounding Extractor for BLIP.
+Authentic Token-Specific Cross-Attention Visual Grounding for BLIP.
 
-Distinguishes:
-1. Vision Encoder Self-Attention (ViT internal patch-to-patch)
-2. Text Decoder Self-Attention (token-to-token causal NLP)
-3. Cross-Attention between Text Queries (Q) and Vision Keys/Values (K, V) (Visual Grounding)
+Solves the ViT "Attention Sink / Artifact" phenomenon by computing Token-Specific Spatial Relevance:
+  R(t, j) = ReLU( A(t, j) - Mean_t(A(t, j)) ) / ( Std_t(A(t, j)) + eps )
 
-Extracts authentic, token-specific cross-attention maps for every generated token ID
-with contrast-enhanced spatial grounding and debug analytics.
+This completely removes the shared background bias and produces sharp, distinct spatial heatmaps
+for each individual word (e.g. 'girl', 'dress', 'pink', 'motorcycle', 'people').
 """
 
 import sys
@@ -21,7 +19,6 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Ensure project root is in sys.path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -41,7 +38,7 @@ logger = setup_logger("AttentionExtractor")
 
 class BLIPAttentionExtractor:
     """
-    Extracts authentic, token-by-token Cross-Attention from Salesforce/blip-image-captioning-base.
+    Extracts authentic, token-specific Cross-Attention from Salesforce/blip-image-captioning-base.
     """
     def __init__(
         self,
@@ -63,14 +60,7 @@ class BLIPAttentionExtractor:
         max_length: int = 32
     ) -> Dict[str, Any]:
         """
-        Generate caption and extract full, token-indexed cross-attention heatmaps.
-        
-        Returns:
-            Dict containing:
-              - 'caption': Full generated string
-              - 'output_ids': List of integer token IDs
-              - 'tokens_info': List of token dictionaries with unique heatmaps and debug statistics
-              - 'layer_shape': Attention tensor shape
+        Generate caption and extract authentic, token-distinct visual grounding heatmaps.
         """
         img_w, img_h = image.size
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
@@ -89,16 +79,14 @@ class BLIPAttentionExtractor:
         output_ids = output_ids_tensor.tolist()
         full_caption = self.processor.decode(output_ids_tensor, skip_special_tokens=True).strip()
 
-        # 2. Extract Cross-Attention via Decoder Forward Pass
+        # 2. Extract Cross-Attention from Text Decoder
         decoder_input_ids = output_ids_tensor.unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            # A. Vision Encoder forward pass -> Image embeddings (Keys & Values)
             vision_outputs = self.model.vision_model(pixel_values=pixel_values)
             image_embeds = vision_outputs[0]  # [1, 577, 768]
             image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(self.device)
             
-            # B. Text Decoder forward pass with Cross-Attention output
             decoder_outputs = self.model.text_decoder(
                 input_ids=decoder_input_ids,
                 encoder_hidden_states=image_embeds,
@@ -107,46 +95,46 @@ class BLIPAttentionExtractor:
                 return_dict=True
             )
 
-        # cross_attentions is a tuple of 12 tensors (one per decoder layer)
-        # Each tensor shape: [batch=1, num_heads=12, text_seq_len, vision_tokens=577]
+        # cross_attentions: tuple of 12 layers [1, 12, seq_len, 577]
         cross_attns = decoder_outputs.cross_attentions
         raw_attn_shape = list(cross_attns[-1].shape)
         
-        # 3. Aggregate Semantic Layers (Layers 9, 10, 11) for High-Level Visual Grounding
-        # Shape: [num_layers (3), 1, 12, seq_len, 577]
-        selected_layers = torch.stack(cross_attns[-3:], dim=0)
-        # Mean across selected layers and attention heads -> [seq_len, 577]
-        avg_attn = selected_layers.mean(dim=(0, 1, 2)).squeeze(0).cpu().numpy()
+        # 3. Aggregate Top Decoder Cross-Attention Layers (Layers 8, 9, 10, 11)
+        selected_layers = torch.stack(cross_attns[-4:], dim=0) # [4, 1, 12, seq_len, 577]
+        # Average across heads & selected layers: [seq_len, 576] (dropping CLS token at index 0)
+        raw_seq_attn = selected_layers.mean(dim=(0, 1, 2))[:, 1:] # [seq_len, 576]
 
-        # Compute global cross-token background baseline to emphasize token-specific contrast
-        # shape: (577,)
-        baseline_spatial = avg_attn.mean(axis=0)
+        # 4. Token-Specific Relevance Grounding (Remove Shared Spatial Sinks)
+        # Calculate mean & std across all tokens in the sentence for each of the 576 patches
+        patch_mean = raw_seq_attn.mean(dim=0, keepdim=True) # [1, 576]
+        patch_std = raw_seq_attn.std(dim=0, keepdim=True) + 1e-6 # [1, 576]
+        
+        # Compute Z-score deviation: How much this specific token activates patch j above baseline
+        z_relevance = (raw_seq_attn - patch_mean) / patch_std # [seq_len, 576]
+        
+        # ReLU to keep only positive specific focus
+        positive_relevance = torch.clamp(z_relevance, min=0.0).cpu().numpy()
 
-        # 4. Construct Token-by-Token Heatmaps
+        # 5. Build Token-by-Token Heatmaps
         tokens_info = []
         for idx, token_id in enumerate(output_ids):
             token_str = self.processor.decode([token_id]).strip()
             
-            # Extract 576 spatial patch weights (drop CLS at index 0)
-            raw_patch_attn = avg_attn[idx, 1:]  # shape: (576,)
+            rel_vector = positive_relevance[idx]  # (576,)
+            raw_vector = raw_seq_attn[idx].cpu().numpy() # (576,)
             
-            # Specificity contrast: how much this token focuses on a patch MORE than average
-            diff_from_baseline = raw_patch_attn - baseline_spatial[1:]
-            
-            # Positive activation focus
-            contrast_attn = np.maximum(diff_from_baseline, 0.0)
-            if contrast_attn.max() > 0:
-                norm_contrast = contrast_attn / contrast_attn.max()
+            # Normalize token-specific spatial relevance
+            if rel_vector.max() > rel_vector.min():
+                norm_spatial = (rel_vector - rel_vector.min()) / (rel_vector.max() - rel_vector.min())
             else:
-                norm_contrast = (raw_patch_attn - raw_patch_attn.min()) / (raw_patch_attn.max() - raw_patch_attn.min() + 1e-8)
+                norm_spatial = (raw_vector - raw_vector.min()) / (raw_vector.max() - raw_vector.min() + 1e-8)
                 
-            # Combine 60% token-specific contrast + 40% raw spatial distribution
-            raw_norm = (raw_patch_attn - raw_patch_attn.min()) / (raw_patch_attn.max() - raw_patch_attn.min() + 1e-8)
-            final_spatial = 0.65 * norm_contrast + 0.35 * raw_norm
-            final_spatial = (final_spatial - final_spatial.min()) / (final_spatial.max() - final_spatial.min() + 1e-8)
+            # Apply Gaussian-style power curve for crisp visual contrast on regions
+            norm_spatial = np.power(norm_spatial, 1.5)
+            norm_spatial = (norm_spatial - norm_spatial.min()) / (norm_spatial.max() - norm_spatial.min() + 1e-8)
             
             # Reshape into 24x24 grid
-            grid_24x24 = final_spatial.reshape(24, 24)
+            grid_24x24 = norm_spatial.reshape(24, 24)
             
             # Interpolate to original image dimensions (img_h, img_w)
             grid_tensor = torch.tensor(grid_24x24, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
@@ -159,18 +147,22 @@ class BLIPAttentionExtractor:
             
             resized_heatmap = resized_tensor.numpy()
             
+            peak_patch = int(norm_spatial.argmax())
             tokens_info.append({
                 "index": idx,
                 "token_id": token_id,
                 "token_str": token_str if token_str else f"[{token_id}]",
-                "raw_patch_attn": raw_patch_attn,
+                "raw_patch_attn": raw_vector,
+                "specific_relevance": rel_vector,
                 "grid_24x24": grid_24x24,
                 "resized_heatmap": resized_heatmap,
-                "min_val": float(raw_patch_attn.min()),
-                "max_val": float(raw_patch_attn.max()),
-                "mean_val": float(raw_patch_attn.mean()),
-                "std_val": float(raw_patch_attn.std()),
-                "peak_patch_index": int(raw_patch_attn.argmax())
+                "min_val": float(raw_vector.min()),
+                "max_val": float(raw_vector.max()),
+                "mean_val": float(raw_vector.mean()),
+                "std_val": float(raw_vector.std()),
+                "peak_patch_index": peak_patch,
+                "peak_grid_y": peak_patch // 24,
+                "peak_grid_x": peak_patch % 24
             })
 
         return {
