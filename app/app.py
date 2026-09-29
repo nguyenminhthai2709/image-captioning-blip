@@ -18,6 +18,8 @@ from typing import Tuple, Dict, Any, Optional
 
 import streamlit as st
 import torch
+import numpy as np
+import pandas as pd
 from PIL import Image
 
 # Ensure project root is in sys.path
