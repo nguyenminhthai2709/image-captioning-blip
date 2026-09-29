@@ -277,44 +277,41 @@ def main():
                     # Visual Grounding / Attention Map Section
                     # ---------------------------------------------------------
                     st.markdown("---")
-                    st.subheader("3. 🎯 Visual Grounding: Cross-Attention Heatmap (Debug & Analysis)")
-                    st.caption("Trích xuất trực tiếp trọng số **Cross-Attention** từ Text Decoder lên $576$ patches ($24 \\times 24$) của Vision Encoder:")
+                    st.subheader("3. 🎯 Visual Grounding: Cross-Attention Heatmap (Word-Level)")
+                    st.caption("Trích xuất và gộp trọng số **Cross-Attention** từ Text Decoder cho từng **Word hoàn chỉnh** lên $576$ visual patches ($24 \\times 24$):")
                     
-                    with st.spinner("Đang trích xuất Cross-Attention cho câu caption hiện tại..."):
+                    with st.spinner("Đang trích xuất Cross-Attention cho từng Word..."):
                         extractor = load_attention_extractor()
                         attn_res = extractor.extract_attention_for_caption(selected_image, caption=caption)
                         
-                    tokens_list = attn_res.get("tokens_info", [])
+                    words_list = attn_res.get("words_info", [])
                     
-                    if not tokens_list:
-                        st.error("Không thể trích xuất tokens_info. Vui lòng thử lại.")
+                    if not words_list:
+                        st.error("Không thể trích xuất words_info. Vui lòng thử lại.")
                         st.stop()
                         
-                    # Format token labels for dropdown (showing index, token string and token ID)
-                    token_options = [
-                        f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})"
-                        for t in tokens_list
-                        if t['token_str'] not in ("[CLS]", "[SEP]", "[PAD]", "")
-                    ]
-                    
-                    if not token_options:
-                        token_options = [f"[{t['index']}] \"{t['token_str']}\" (Token ID: {t['token_id']})" for t in tokens_list]
+                    # Format Word labels for dropdown
+                    word_options = []
+                    for w in words_list:
+                        subwords_str = f" (Subwords: {', '.join(w['tokens'])})" if w['is_multi_token'] else f" (Token ID: {w['token_ids'][0]})"
+                        label = f"Word #{w['word_index']}: \"{w['word']}\"{subwords_str}"
+                        word_options.append(label)
                         
-                    # Dropdown for exact token selection
+                    # Dropdown for exact Word selection
                     chosen_option = st.selectbox(
-                        "🔍 Chọn Token / Từ vựng để kiểm tra vùng thị giác được kích hoạt:",
-                        token_options,
-                        index=min(1, len(token_options) - 1)
+                        "🔍 Chọn Word để phân tích Visual Grounding:",
+                        word_options,
+                        index=min(1, len(word_options) - 1)
                     )
                     
-                    # Extract index directly from label "[idx] ..."
-                    chosen_idx = int(chosen_option.split("]")[0].replace("[", "").strip())
-                    selected_token_data = tokens_list[chosen_idx]
+                    # Extract word index directly from label "Word #idx: ..."
+                    chosen_w_idx = int(chosen_option.split(":")[0].replace("Word #", "").strip()) - 1
+                    selected_word_data = words_list[chosen_w_idx]
                     
                     # Overlay heatmap
                     overlay = BLIPAttentionExtractor.overlay_heatmap_on_image(
                         selected_image,
-                        selected_token_data["resized_heatmap"],
+                        selected_word_data["resized_heatmap"],
                         alpha=0.55,
                         colormap="jet"
                     )
@@ -325,49 +322,56 @@ def main():
                     with col_v2:
                         st.image(
                             overlay,
-                            caption=f"Vùng kích hoạt cho Token: \"{selected_token_data['token_str']}\" (ID: {selected_token_data['token_id']})",
+                            caption=f"Cross-Attention Heatmap cho Word: \"{selected_word_data['word']}\"",
                             use_container_width=True
                         )
                         
                     # ---------------------------------------------------------
-                    # COMPLETE DEBUG & VERIFICATION PANEL
+                    # COMPLETE DEBUG & WORD AGGREGATION PANEL
                     # ---------------------------------------------------------
-                    with st.expander("🛠️ Xem Toàn Bộ Thông Số Debug & Ma Trận Khác Biệt (Attention Verification)", expanded=True):
-                        st.markdown(f"### 1. Thông Tin Pipeline Chuỗi & Token")
-                        st.write(f"• **Generated Caption:** `{caption}`")
-                        all_tok_str = " -> ".join([f"'{t['token_str']}' ({t['token_id']})" for t in tokens_list])
-                        st.write(f"• **Decoded Sequence:** `{all_tok_str}`")
-                        st.write(f"• **Token IDs List:** `{attn_res['output_ids']}`")
+                    with st.expander("🛠️ Xem Thông Số Debug & Chi Tiết Gộp Subword Tokens (Word Grounding Analytics)", expanded=True):
+                        st.markdown(f"**Generated Caption:** `{caption}`")
                         
-                        st.markdown("---")
-                        st.markdown(f"### 2. Chi Tiết Token Đang Chọn (Selected Token)")
-                        col_d1, col_d2, col_d3 = st.columns(3)
-                        with col_d1:
-                            st.write(f"• **Selected Word:** `{selected_token_data['token_str']}`")
-                            st.write(f"• **Selected Index:** `[{selected_token_data['index']}]`")
-                            st.write(f"• **Selected Token ID:** `{selected_token_data['token_id']}`")
-                        with col_d2:
-                            st.write(f"• **Cross-Attn Tensor:** `{attn_res['raw_attn_shape']}`")
-                            st.caption("(Batch=1, Heads=12, Text_Len, Vision_Tokens=577)")
-                            st.write(f"• **Token Vector Shape:** `[576]` -> `[24, 24]`")
-                        with col_d3:
-                            peak_p = selected_token_data.get('peak_patch_index', 0)
-                            st.write(f"• **Raw Attn Min / Max:** `{selected_token_data['min_val']:.5f}` / `{selected_token_data['max_val']:.5f}`")
+                        col_w1, col_w2 = st.columns(2)
+                        with col_w1:
+                            st.markdown(f"**Selected Word:** `{selected_word_data['word']}`")
+                            st.write(f"• **Word Index in Sentence:** `#{selected_word_data['word_index']}`")
+                            st.write(f"• **Number of Subword Tokens:** `{selected_word_data['num_subwords']}`")
+                            st.markdown("**Subword Tokens:**")
+                            for tok in selected_word_data['tokens']:
+                                st.write(f"  - `{tok}`")
+                                
+                            st.markdown("**Token IDs:**")
+                            for tid in selected_word_data['token_ids']:
+                                st.write(f"  - `{tid}`")
+                                
+                            st.markdown("**Token Positions:**")
+                            for pos in selected_word_data['token_indices']:
+                                st.write(f"  - `{pos}`")
+                                
+                        with col_w2:
+                            peak_p = selected_word_data.get('peak_patch_index', 0)
+                            st.write(f"• **Visual Tokens:** `576`")
+                            st.write(f"• **Spatial Grid:** `24 x 24`")
+                            st.write(f"• **Cross-Attn Tensor Shape:** `{attn_res['raw_attn_shape']}`")
+                            st.write(f"• **Raw Attn Min / Max:** `{selected_word_data['min_val']:.5f}` / `{selected_word_data['max_val']:.5f}`")
                             st.write(f"• **Peak Patch Index:** `#{peak_p}` (Row {peak_p // 24}, Col {peak_p % 24})")
+                            st.info(
+                                "ℹ️ **Cơ chế Gộp:** " + 
+                                (f"Tính trung bình cộng `mean({', '.join(selected_word_data['tokens'])})` của {selected_word_data['num_subwords']} subword tokens." if selected_word_data['is_multi_token'] else "Sử dụng trực tiếp attention của token duy nhất.")
+                            )
 
                         st.markdown("---")
-                        st.markdown("### 3. Ma Trận Đo Lường Độ Khác Biệt Giữa Các Token (Dissimilarity Matrix)")
-                        st.caption("Tính toán Mean Absolute Difference (MAD), Khoảng cách Euclidean L2, và Cosine Similarity:")
+                        st.markdown("### Ma Trận Đo Lường Độ Khác Biệt Giữa Các Word (Word Dissimilarity Matrix)")
+                        st.caption("Tính toán Mean Absolute Difference (MAD), Khoảng cách Euclidean L2, và Cosine Similarity giữa các Word:")
                         
                         diff_rows = []
-                        current_vec = selected_token_data.get("specific_relevance", selected_token_data["raw_patch_attn"])
+                        current_vec = selected_word_data.get("specific_relevance", selected_word_data["raw_patch_attn"])
                         
-                        for other_t in tokens_list:
-                            if other_t["token_str"] in ("[CLS]", "[SEP]", "[PAD]", ""):
+                        for other_w in words_list:
+                            if other_w["word_index"] == selected_word_data["word_index"]:
                                 continue
-                            if other_t["index"] == chosen_idx:
-                                continue
-                            other_vec = other_t.get("specific_relevance", other_t["raw_patch_attn"])
+                            other_vec = other_w.get("specific_relevance", other_w["raw_patch_attn"])
                             
                             mad = float(np.mean(np.abs(current_vec - other_vec)))
                             l2_d = float(np.linalg.norm(current_vec - other_vec))
@@ -375,7 +379,7 @@ def main():
                             cos_sim = float(np.dot(current_vec, other_vec) / (norm_prod + 1e-8)) if norm_prod > 0 else 1.0
                             
                             diff_rows.append({
-                                "Cặp So Sánh (Token A vs Token B)": f"\"{selected_token_data['token_str']}\" vs \"{other_t['token_str']}\" (ID: {other_t['token_id']})",
+                                "Cặp So Sánh (Word A vs Word B)": f"#{selected_word_data['word_index']} \"{selected_word_data['word']}\" vs #{other_w['word_index']} \"{other_w['word']}\"",
                                 "Mean Abs Diff (MAD)": f"{mad:.5f}",
                                 "Khoảng cách L2": f"{l2_d:.4f}",
                                 "Cosine Similarity": f"{cos_sim:.4f}",

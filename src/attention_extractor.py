@@ -1,13 +1,14 @@
 """
-Authentic Token-Specific Cross-Attention Visual Grounding for BLIP.
+Word-Level Visual Grounding & Subword Token Aggregation for BLIP.
 
-Extracts cross-attention for the EXACT generated caption by:
-1. Passing the image through Vision Encoder -> H_vis [1, 577, 768]
-2. Tokenizing the generated caption -> input_ids [1, seq_len]
-3. Passing (input_ids, H_vis) to Text Decoder with output_attentions=True
-4. Extracting cross-attention tensor [12 layers, 12 heads, seq_len, 577 visual tokens]
-5. Computing Token-Specific Spatial Relevance to eliminate shared background sinks:
-   R(t, j) = ReLU( (A(t, j) - Mean_t(A(t, j))) / (Std_t(A(t, j)) + eps) )
+Why Subword Tokenization & Attention Aggregation are necessary:
+1. BLIP uses WordPiece/BERT tokenization. Rare, compound, or morphological words
+   (e.g., 'croche', 'motorcycles') are decomposed into multiple subword tokens (e.g., ['cr', '##oche']).
+2. Each subword token queries the ViT-B/16 image features individually in the Cross-Attention layer.
+3. To visualize the visual grounding of the complete semantic word, the attention vectors
+   of all constituent subwords must be aggregated:
+       A_word = Mean( A_subword_1, A_subword_2, ... ) ∈ ℝ^(576)
+   followed by spatial normalization and bilinear interpolation to the original image dimensions.
 """
 
 import sys
@@ -40,7 +41,8 @@ logger = setup_logger("AttentionExtractor")
 
 class BLIPAttentionExtractor:
     """
-    Extracts authentic, token-by-token Cross-Attention from Salesforce/blip-image-captioning-base.
+    Extracts authentic, word-level Cross-Attention from Salesforce/blip-image-captioning-base
+    with subword token aggregation and spatial contrast enhancement.
     """
     def __init__(
         self,
@@ -55,22 +57,76 @@ class BLIPAttentionExtractor:
         self.model = BlipForConditionalGeneration.from_pretrained(model_name).to(self.device)
         self.model.eval()
 
+    @staticmethod
+    def group_subwords_into_words(
+        input_ids: List[int],
+        tokens: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Group raw subword tokens (e.g., ['cr', '##oche']) into complete human words ('croche').
+        Preserves exact word sequence position, token IDs, and subword indices.
+        """
+        words_data = []
+        current_word_tokens = []
+        current_word_ids = []
+        current_word_indices = []
+        current_word_str = ""
+
+        for idx, (tok_id, tok) in enumerate(zip(input_ids, tokens)):
+            if tok in ("[CLS]", "[SEP]", "[PAD]"):
+                continue
+                
+            if tok.startswith("##"):
+                current_word_tokens.append(tok)
+                current_word_ids.append(tok_id)
+                current_word_indices.append(idx)
+                current_word_str += tok[2:]
+            else:
+                if current_word_tokens:
+                    words_data.append({
+                        "word_index": len(words_data) + 1,
+                        "word": current_word_str,
+                        "tokens": current_word_tokens,
+                        "token_ids": current_word_ids,
+                        "token_indices": current_word_indices,
+                        "is_multi_token": len(current_word_tokens) > 1,
+                        "num_subwords": len(current_word_tokens)
+                    })
+                current_word_tokens = [tok]
+                current_word_ids = [tok_id]
+                current_word_indices = [idx]
+                current_word_str = tok
+
+        if current_word_tokens:
+            words_data.append({
+                "word_index": len(words_data) + 1,
+                "word": current_word_str,
+                "tokens": current_word_tokens,
+                "token_ids": current_word_ids,
+                "token_indices": current_word_indices,
+                "is_multi_token": len(current_word_tokens) > 1,
+                "num_subwords": len(current_word_tokens)
+            })
+
+        return words_data
+
     def extract_attention_for_caption(
         self,
         image: Image.Image,
         caption: str
     ) -> Dict[str, Any]:
         """
-        Extract authentic Cross-Attention for the EXACT given caption and image.
+        Extract authentic Cross-Attention for the EXACT caption and aggregate subwords to words.
         
-        Guarantees 100% mathematical identity between:
-        - The caption string
-        - Token IDs and decoded token words
-        - Text Decoder Cross-Attention spatial heatmaps
+        Returns:
+            Dict containing:
+              - 'caption': Full generated caption string
+              - 'words_info': List of Word dictionaries with aggregated attention heatmaps
+              - 'raw_attn_shape': Shape of the cross-attention tensor
         """
         img_w, img_h = image.size
         
-        # 1. Image Preprocessing & Vision Encoder
+        # 1. Vision Encoder Forward Pass
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         pixel_values = inputs.pixel_values
 
@@ -81,54 +137,58 @@ class BLIPAttentionExtractor:
 
         # 2. Tokenize the EXACT Caption
         caption_encoding = self.processor.tokenizer(caption, return_tensors="pt").to(self.device)
-        input_ids = caption_encoding.input_ids[0] # [seq_len]
-        output_ids = input_ids.tolist()
-        
-        # Decode tokens individually
-        decoded_tokens = [self.processor.tokenizer.decode([t_id]).strip() for t_id in input_ids]
+        input_ids_tensor = caption_encoding.input_ids[0]
+        input_ids = input_ids_tensor.tolist()
+        tokens = self.processor.tokenizer.convert_ids_to_tokens(input_ids)
 
-        # 3. Forward Pass through Text Decoder with Cross-Attention output
+        # 3. Text Decoder Cross-Attention Pass
         with torch.no_grad():
             decoder_outputs = self.model.text_decoder(
-                input_ids=input_ids.unsqueeze(0),
+                input_ids=input_ids_tensor.unsqueeze(0),
                 encoder_hidden_states=image_embeds,
                 encoder_attention_mask=image_atts,
                 output_attentions=True,
                 return_dict=True
             )
 
-        # cross_attentions: tuple of 12 decoder layers
-        # Each layer shape: [batch=1, num_heads=12, seq_len, vision_tokens=577]
+        # Tuple of 12 cross-attention tensors: [1, 12, seq_len, 577]
         cross_attns = decoder_outputs.cross_attentions
         raw_attn_shape = list(cross_attns[-1].shape)
         
         # 4. Aggregate High-Level Semantic Layers (Layers 8, 9, 10, 11)
         # Shape: [4, 1, 12, seq_len, 577]
         selected_layers = torch.stack(cross_attns[-4:], dim=0)
-        # Average across 4 layers and 12 heads: [seq_len, 576] (dropping CLS token at index 0)
+        # Mean across 4 layers and 12 heads -> [seq_len, 576] (dropping CLS token at index 0)
         raw_seq_attn = selected_layers.mean(dim=(0, 1, 2)).squeeze(0)[:, 1:] # [seq_len, 576]
 
-        # 5. Token-Specific Relevance Grounding (Eliminate shared background sinks)
-        # Calculate mean & std across all tokens in the sentence for each of the 576 patches
-        patch_mean = raw_seq_attn.mean(dim=0, keepdim=True) # [1, 576]
-        patch_std = raw_seq_attn.std(dim=0, keepdim=True) + 1e-6 # [1, 576]
-        
-        # Z-score deviation
-        z_relevance = (raw_seq_attn - patch_mean) / patch_std # [seq_len, 576]
-        positive_relevance = torch.clamp(z_relevance, min=0.0).cpu().numpy()
+        # 5. Token-Specific Relevance Grounding (Z-score to eliminate attention sinks)
+        patch_mean = raw_seq_attn.mean(dim=0, keepdim=True)
+        patch_std = raw_seq_attn.std(dim=0, keepdim=True) + 1e-6
+        z_relevance = (raw_seq_attn - patch_mean) / patch_std
+        positive_relevance = torch.clamp(z_relevance, min=0.0) # [seq_len, 576]
 
-        # 6. Build Structured Token Info & Heatmaps
-        tokens_info = []
-        for idx, (token_id, token_str) in enumerate(zip(output_ids, decoded_tokens)):
-            rel_vector = positive_relevance[idx]  # shape: (576,)
-            raw_vector = raw_seq_attn[idx].cpu().numpy() # shape: (576,)
+        # 6. Group Subwords into Words & Aggregate Attentions
+        words_data = self.group_subwords_into_words(input_ids, tokens)
+        
+        words_info = []
+        for w in words_data:
+            indices = w["token_indices"]
             
-            # Normalize spatial relevance
-            if rel_vector.max() > rel_vector.min():
-                norm_spatial = (rel_vector - rel_vector.min()) / (rel_vector.max() - rel_vector.min())
+            # Step 7 & 9: Aggregate subwords with mean() or use single token directly
+            if len(indices) == 1:
+                word_raw_attn = raw_seq_attn[indices[0]].cpu().numpy()
+                word_relevance = positive_relevance[indices[0]].cpu().numpy()
             else:
-                norm_spatial = (raw_vector - raw_vector.min()) / (raw_vector.max() - raw_vector.min() + 1e-8)
+                word_raw_attn = raw_seq_attn[indices].mean(dim=0).cpu().numpy()
+                word_relevance = positive_relevance[indices].mean(dim=0).cpu().numpy()
                 
+            # Normalize spatial relevance
+            if word_relevance.max() > word_relevance.min():
+                norm_spatial = (word_relevance - word_relevance.min()) / (word_relevance.max() - word_relevance.min())
+            else:
+                norm_spatial = (word_raw_attn - word_raw_attn.min()) / (word_raw_attn.max() - word_raw_attn.min() + 1e-8)
+                
+            # Apply power curve for crisp visual contrast on regions
             norm_spatial = np.power(norm_spatial, 1.4)
             norm_spatial = (norm_spatial - norm_spatial.min()) / (norm_spatial.max() - norm_spatial.min() + 1e-8)
             
@@ -147,18 +207,22 @@ class BLIPAttentionExtractor:
             resized_heatmap = resized_tensor.numpy()
             peak_patch = int(norm_spatial.argmax())
             
-            tokens_info.append({
-                "index": idx,
-                "token_id": token_id,
-                "token_str": token_str if token_str else f"[{token_id}]",
-                "raw_patch_attn": raw_vector,
-                "specific_relevance": rel_vector,
+            words_info.append({
+                "word_index": w["word_index"],
+                "word": w["word"],
+                "tokens": w["tokens"],
+                "token_ids": w["token_ids"],
+                "token_indices": w["token_indices"],
+                "num_subwords": w["num_subwords"],
+                "is_multi_token": w["is_multi_token"],
+                "raw_patch_attn": word_raw_attn,
+                "specific_relevance": word_relevance,
                 "grid_24x24": grid_24x24,
                 "resized_heatmap": resized_heatmap,
-                "min_val": float(raw_vector.min()),
-                "max_val": float(raw_vector.max()),
-                "mean_val": float(raw_vector.mean()),
-                "std_val": float(raw_vector.std()),
+                "min_val": float(word_raw_attn.min()),
+                "max_val": float(word_raw_attn.max()),
+                "mean_val": float(word_raw_attn.mean()),
+                "std_val": float(word_raw_attn.std()),
                 "peak_patch_index": peak_patch,
                 "peak_grid_y": peak_patch // 24,
                 "peak_grid_x": peak_patch % 24
@@ -166,9 +230,9 @@ class BLIPAttentionExtractor:
 
         return {
             "caption": caption,
-            "output_ids": output_ids,
             "raw_attn_shape": raw_attn_shape,
-            "tokens_info": tokens_info
+            "words_info": words_info,
+            "tokens_info": words_info  # Backward compatibility alias
         }
 
     def generate_and_extract_attention(
@@ -177,7 +241,7 @@ class BLIPAttentionExtractor:
         num_beams: int = 5,
         max_length: int = 32
     ) -> Dict[str, Any]:
-        """Generate caption first, then extract authentic cross-attention for that exact caption."""
+        """Generate caption first, then extract word-level cross-attention."""
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         pixel_values = inputs.pixel_values
 
@@ -208,7 +272,7 @@ class BLIPAttentionExtractor:
             
         heatmap_2d = np.clip(heatmap_2d, 0.0, 1.0)
         cmap = cm.get_cmap(colormap)
-        colored_rgba = cmap(heatmap_2d) # [H, W, 4]
+        colored_rgba = cmap(heatmap_2d)
         colored_rgb = (colored_rgba[:, :, :3] * 255).astype(np.uint8)
         heatmap_pil = Image.fromarray(colored_rgb)
         

@@ -97,6 +97,34 @@ flowchart TD
   $$\hat{S} = \arg\max_{S} \sum_{t=1}^{T} \log P(w_t \mid w_{<t}, H_{\text{vis}})$$
 * **Kết quả:** `"a little girl standing in front of a chicken coop"`.
 
+### 2.6. Visual Grounding: Phân tích Cross-Attention Heatmap theo Word hoàn chỉnh (Word-Level Grounding)
+
+Trong kiến trúc Vision-Language như BLIP, việc phân tích **Visual Grounding** (xác định vùng thị giác tương ứng với từng từ ngữ) giải quyết các thách thức kỹ thuật cốt lõi:
+
+#### A. Tại sao một Word có thể gồm nhiều Subword Tokens?
+* BLIP sử dụng bộ từ vựng cố định (~30,522 tokens) dựa trên thuật toán **WordPiece Tokenization (BERT)**.
+* Khi gặp các từ hiếm, từ ghép hoặc biến thể hình thái học (ví dụ: từ ngữ cảnh thời trang `"croche"`, từ ghép `"motorcycles"`), tokenizer không lưu trữ nguyên từ mà chia nhỏ thành các **subwords**:
+  $$\text{"croche"} \longrightarrow [13675: \text{"cr"}] + [23555: \text{"##oche"}]$$
+  Dấu tiền tố `##` biểu thị subword này nối tiếp liền mạch với subword đứng trước để tạo thành 1 từ hoàn chỉnh.
+
+#### B. Tại sao cần gộp Cross-Attention (Attention Aggregation)?
+* Trong Text Decoder, mỗi subword token (ví dụ: `"cr"` và `"##oche"`) gửi truy vấn Query ($Q$) độc lập đến $576$ visual patches ($K, V$) của Vision Transformer $\text{ViT-B/16}$.
+* Người dùng và các nhà nghiên cứu cần quan sát sự chú ý thị giác của **toàn bộ khái niệm ngữ nghĩa (semantic word)** chứ không phải một mảnh hình thái rời rạc vô nghĩa.
+* Do đó, hệ thống tự động gộp các vector attention tương ứng bằng phép toán kỳ vọng:
+  $$A_{\text{word}} = \frac{1}{|T_{\text{word}}|} \sum_{t \in T_{\text{word}}} A_t \in \mathbb{R}^{576}$$
+  Với từ chỉ gồm 1 token duy nhất (như `"wearing"`, `"hat"`), vector attention được sử dụng trực tiếp ($|T|=1$).
+
+#### C. Xử lý Trùng Lặp Từ (Repeated Words Disambiguation)
+* Khi một từ xuất hiện nhiều lần ở các vị trí ngữ cảnh khác nhau (ví dụ: `"a man wearing a croche hat ... in a room"` có 3 từ `"a"`):
+  * Hệ thống quản lý theo bộ chỉ số định danh: `(word_index, token_indices)`.
+  * Vị trí `"a"` #1 ($t=1$), `"a"` #4 ($t=4$), `"a"` #10 ($t=11$) được phân tích hoàn toàn độc lập, kích hoạt các vùng patch thị giác riêng biệt (Patch #311, Patch #48, Patch #408).
+
+#### D. Chuẩn hóa Khử Điểm Trũng Thị Giác ViT (Spatial Z-score Relevance)
+* Trong Vision Transformer, một số patch nền/biên có chuẩn vector lớn (Attention Sink) thường nhận attention nền chung từ tất cả các token.
+* Thuật toán áp dụng chuẩn hóa $Z$-score theo chuỗi câu để cô lập trọng số kích hoạt đặc thù của từ:
+  $$R(t, j) = \text{ReLU}\left(\frac{A(t, j) - \mu_j}{\sigma_j}\right)$$
+  Sau đó định hình thành ma trận không gian $24 \times 24$, nội suy song bậc ba (Bicubic) lên kích thước ảnh gốc và tạo bản đồ nhiệt (Heatmap Overlay).
+
 ---
 
 ## 3. Hướng dẫn Chạy Suy Luận (Pretrained BLIP Inference)
