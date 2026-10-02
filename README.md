@@ -56,18 +56,19 @@ flowchart TD
 ```
 
 ### 2.1. Ảnh RGB được tiền xử lý như thế nào? (Image $\to$ Preprocessing)
-* **Spatial Resizing:** Ảnh thô trong thực tế có kích thước không cố định (ví dụ: $375 \times 500$ px). Thuật toán **Bicubic Interpolation** được sử dụng để đưa ảnh về kích thước chuẩn $(384 \times 384)$ px. Phương pháp này nội suy dựa trên $16$ điểm ảnh lân cận, giúp làm mịn biên độ dốc màu và bảo toàn các đường biên (edges) sắc nét của vật thể.
+* **Quy trình chuẩn hóa:** Tiền xử lý thị giác được thực hiện trực tiếp bởi `BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")` để đảm bảo độ tương thích tuyệt đối với pretrained checkpoint.
+* **Spatial Resizing:** Ảnh thô (PIL RGB) được biến đổi về kích thước chuẩn $(384 \times 384)$ px bằng thuật toán **Bicubic Interpolation**.
 * **Scaling:** Giá trị pixel từ số nguyên rời rạc $[0, 255]$ được chuẩn hóa về số thực trong khoảng $[0.0, 1.0]$.
 
 ### 2.2. Tensor biểu diễn ảnh như thế nào? (Preprocessing $\to$ Tensor)
-* **Định dạng Chiều:** Chuyển đổi từ định dạng ảnh $\text{HWC}$ (Height, Width, Channels) sang Tensor PyTorch $\text{BCHW}$:
+* **Định dạng Chiều:** Chuyển đổi từ định dạng ảnh $\text{HWC}$ sang Tensor PyTorch $\text{BCHW}$:
   $$X \in \mathbb{R}^{B \times 3 \times 384 \times 384} \quad (\text{với } B=1 \text{ khi suy luận đơn ảnh})$$
-* **Chuẩn hóa Phân phối Kênh màu (Channel Normalization):**
+* **Chuẩn hóa Phân phối Kênh màu (BLIP Processor Normalization - ImageNet-derived):**
   $$X_{\text{norm}}(c, i, j) = \frac{X(c, i, j) - \mu_c}{\sigma_c}$$
-  với các tham số chuẩn của ImageNet:
+  với các tham số cấu hình của BLIP Processor:
   * $\mu = [0.48145466, 0.4578275, 0.40821073]$
   * $\sigma = [0.26862954, 0.26130258, 0.27577711]$
-* **Ý nghĩa:** Giá trị pixel sau chuẩn hóa nằm trong đoạn $[-1.792, 2.146]$ với kỳ vọng $\text{mean} \approx 0$ và phương sai $\text{std} \approx 1$. Điều này giúp các hàm kích hoạt phi tuyến (như GeLU) trong Transformer tránh hiện tượng bão hòa gradient.
+* **Ý nghĩa:** Giá trị pixel sau chuẩn hóa nằm trong đoạn $[-1.792, 2.146]$ với kỳ vọng $\text{mean} \approx 0$ và phương sai $\text{std} \approx 1$. Điều này giúp các hàm kích hoạt phi tuyến trong Transformer (như GeLU) tránh hiện tượng bão hòa gradient.
 
 ### 2.3. Vision Transformer xử lý Image Patches như thế nào? (Tensor $\to$ Vision Encoder)
 * **Patch Partitioning:** Mạng $\text{ViT-B/16}$ chia ma trận ảnh $(3, 384, 384)$ thành lưới các mảnh vuông kích thước $P = 16 \times 16$ px:
@@ -80,7 +81,7 @@ flowchart TD
 * Chuỗi $577$ visual tokens đi qua $12$ khối Transformer Encoder (Multi-Head Self-Attention + MLP).
 * **Bản chất học được:** Từng patch trao đổi thông tin với toàn bộ các patch khác trên ảnh.
   * Các tầng thấp nhận diện đặc trưng cục bộ (màu sắc, hoa văn, cạnh góc).
-  * Các tầng cao tổng hợp ngữ cảnh toàn thể và quan hệ không gian (ví dụ: liên kết vùng "em bé" với vùng "chuồng gà").
+  * Các tầng cao tổng hợp ngữ cảnh toàn thể và quan hệ không gian.
 * **Đầu ra:** Ma trận biểu diễn thị giác hoàn chỉnh:
   $$H_{\text{vis}} \in \mathbb{R}^{1 \times 577 \times 768}$$
 
@@ -92,25 +93,31 @@ flowchart TD
     $$Q = H_{\text{text}} W_Q$$
   * Tính ma trận tương đồng Cross-Attention:
     $$\text{Cross-Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
-* **Ý nghĩa:** Khi sinh đến từ `"chicken"`, truy vấn $Q$ sẽ kích hoạt trọng số chú ý cao nhất tại các patch $K_j$ nằm ở khu vực chuồng gà trên ảnh.
+  * **Ý nghĩa:** Khi sinh đến từ `"chicken"`, truy vấn $Q$ sẽ kích hoạt trọng số chú ý cao nhất tại các patch $K_j$ nằm ở khu vực chuồng gà trên ảnh.
 * **Beam Search Decoding ($k=5$):** Duy trì top 5 chuỗi từ có xác suất đồng thời cao nhất để sinh ra câu văn tự nhiên:
   $$\hat{S} = \arg\max_{S} \sum_{t=1}^{T} \log P(w_t \mid w_{<t}, H_{\text{vis}})$$
 * **Kết quả:** `"a little girl standing in front of a chicken coop"`.
 
 ### 2.6. Visual Grounding: Phân tích Cross-Attention Heatmap theo Word hoàn chỉnh (Word-Level Grounding)
 
-Trong kiến trúc Vision-Language như BLIP, việc phân tích **Visual Grounding** (xác định vùng thị giác tương ứng với từng từ ngữ) giải quyết các thách thức kỹ thuật cốt lõi:
+> **Khái niệm Học thuật:**
+> *"Cross-attention heatmap visualizes the relative attention weights assigned by the text decoder to visual patches when generating a specific token or word."*
+>
+> - Heatmap được sử dụng để **giải thích hành vi mô hình (Interpretability)** và phân tích tương quan thị giác - ngôn ngữ (Visual Grounding).
+> - Heatmap **không phải** là ground-truth bounding box và **không phải** là kết quả Object Detection chính xác tuyệt đối. Vùng có trọng số attention cao phản ánh mức độ tập trung đặc trưng của Decoder lên các patch tương ứng, không đồng nghĩa chắc chắn mô hình đang localization đối tượng chuẩn xác nếu không có nhãn ground-truth localization để kiểm chứng.
+
+**Pipeline Xử Lý:**
+$$\text{Word} \longrightarrow \text{Subword tokens} \longrightarrow \text{Cross-Attention} \longrightarrow 576 \text{ visual patches} \longrightarrow 24 \times 24 \text{ spatial grid} \longrightarrow \text{Heatmap} \longrightarrow \text{Overlay}$$
 
 #### A. Tại sao một Word có thể gồm nhiều Subword Tokens?
 * BLIP sử dụng bộ từ vựng cố định (~30,522 tokens) dựa trên thuật toán **WordPiece Tokenization (BERT)**.
-* Khi gặp các từ hiếm, từ ghép hoặc biến thể hình thái học (ví dụ: từ ngữ cảnh thời trang `"croche"`, từ ghép `"motorcycles"`), tokenizer không lưu trữ nguyên từ mà chia nhỏ thành các **subwords**:
+* Khi gặp các từ hiếm, từ ghép hoặc biến thể hình thái học (ví dụ: từ ngữ cảnh thời trang `"croche"`, từ ghép `"motorcycles"`), tokenizer chia nhỏ thành các **subwords**:
   $$\text{"croche"} \longrightarrow [13675: \text{"cr"}] + [23555: \text{"##oche"}]$$
   Dấu tiền tố `##` biểu thị subword này nối tiếp liền mạch với subword đứng trước để tạo thành 1 từ hoàn chỉnh.
 
 #### B. Tại sao cần gộp Cross-Attention (Attention Aggregation)?
-* Trong Text Decoder, mỗi subword token (ví dụ: `"cr"` và `"##oche"`) gửi truy vấn Query ($Q$) độc lập đến $576$ visual patches ($K, V$) của Vision Transformer $\text{ViT-B/16}$.
-* Người dùng và các nhà nghiên cứu cần quan sát sự chú ý thị giác của **toàn bộ khái niệm ngữ nghĩa (semantic word)** chứ không phải một mảnh hình thái rời rạc vô nghĩa.
-* Do đó, hệ thống tự động gộp các vector attention tương ứng bằng phép toán kỳ vọng:
+* Trong Text Decoder, mỗi subword token (ví dụ: `"cr"` và `"##oche"`) gửi truy vấn Query ($Q$) độc lập đến $576$ visual patches ($K, V$) của $\text{ViT-B/16}$.
+* Để quan sát sự chú ý thị giác của **toàn bộ khái niệm ngữ nghĩa (semantic word)**, hệ thống tự động gộp các vector attention tương ứng bằng phép toán trung bình cộng:
   $$A_{\text{word}} = \frac{1}{|T_{\text{word}}|} \sum_{t \in T_{\text{word}}} A_t \in \mathbb{R}^{576}$$
   Với từ chỉ gồm 1 token duy nhất (như `"wearing"`, `"hat"`), vector attention được sử dụng trực tiếp ($|T|=1$).
 
@@ -183,44 +190,62 @@ python src/train.py --strategy full_finetune --epochs 5 --batch_size 16 --learni
 
 ---
 
-## 5. Đánh giá Định lượng & So Sánh Thực Nghiệm (Experimental Comparison)
+## 5. Kết Quả Đánh Giá & So Sánh Thực Nghiệm (Evaluation Results)
 
-Module [`compare_experiments.py`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/compare_experiments.py) cho phép thực hiện đánh giá đối đầu trực tiếp giữa **Experiment 1 (Pretrained BLIP Zero-Shot)** và **Experiment 2 (BLIP Fine-Tuned)** trên cùng tập Test Set:
+Kết quả đánh giá chính thức được thực hiện đối đầu trực tiếp giữa **Pretrained BLIP (`Salesforce/blip-image-captioning-base`)** và **Fine-Tuned BLIP (`checkpoints/frozen_vision/best_model/`)** trên toàn bộ tập kiểm thử chuẩn Flickr8k.
 
-```bash
-# Chạy so sánh toàn diện trên toàn bộ 1,000 ảnh Flickr8k Test Set
-python compare_experiments.py --checkpoint checkpoints/frozen_vision/best_model --num_beams 5
+### 5.1. Giao thức Đánh giá (Evaluation Protocol)
+* **Tập dữ liệu kiểm thử:** Toàn bộ $1,000$ ảnh test chuẩn từ `data/flickr8k/splits/Flickr_8k.testImages.txt` (hoàn toàn cô lập khỏi tập train/validation).
+* **Ground-Truth References:** $5,000$ câu chú thích chuẩn người dùng từ `data/flickr8k/captions.txt` (đúng $5$ reference captions cho mỗi ảnh test).
+* **Cấu hình Sinh chuỗi (Generation Settings):** Cả 2 mô hình sử dụng cùng cấu hình Beam Search:
+  * `method = "beam_search"`
+  * `num_beams = 3`
+  * `max_length = 32`
+* **Xử lý Ngôn ngữ & Tokenization:** Sử dụng cùng bộ tokenizer, tiền xử lý chữ thường (lowercased) và tách từ thống nhất.
+* **Chỉ số Đánh giá (Metrics):**
+  * **BLEU-1, BLEU-2, BLEU-3, BLEU-4:** Tính theo NLTK `corpus_bleu` kết hợp hàm làm mịn Chen & Cherry Smoothing Method 1.
+  * **METEOR:** Tính theo NLTK `meteor_score` đối chiếu với 5 references của mỗi ảnh, lấy trung bình toàn tập test.
+  * **ROUGE-L:** Tính điểm F1 của Longest Common Subsequence lớn nhất với 5 references qua thư viện `rouge-score` (use_stemmer=True), lấy trung bình toàn tập test.
+* **Độ toàn vẹn dữ liệu:** $1,000$ ảnh xử lý hoàn chỉnh, $0$ ảnh lỗi/thiếu, $0$ reference bị thiếu, $0$ giá trị NaN.
+* **Thời gian thực thi:** $5,742.63$ giây (~$95.71$ phút trên CPU).
+* **Dữ liệu xuất chính thức:**
+  * Thống kê tổng hợp: [`outputs/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/full_test_1000.json)
+  * Chi tiết 1,000 dự đoán: [`outputs/predictions/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/predictions/full_test_1000.json)
 
-# Chạy kiểm tra nhanh trên N ảnh mẫu
-python compare_experiments.py --num_samples 50 --num_beams 5
-```
+### 5.2. Bảng Kết Quả Đánh Giá Chính Thức (Official Quantitative Results - 1,000 Test Images)
 
-### 5.1. Bảng Kết Quả Thực Nghiệm Định Lượng (Quantitative Results)
-Đánh giá trên cùng tập **Flickr8k Test Set** (1,000 ảnh, 5 reference captions/ảnh):
+| Chỉ số (Metric) | Pretrained BLIP (`Salesforce/blip-image-captioning-base`) | Fine-Tuned BLIP (`checkpoints/frozen_vision/best_model/`) | Mức chênh lệch tuyệt đối (Điểm phần trăm / percentage points) |
+| :--- | :---: | :---: | :---: |
+| **BLEU-1** | 58.99% | **71.15%** | **+12.16 percentage points** |
+| **BLEU-2** | 45.08% | **54.86%** | **+9.78 percentage points** |
+| **BLEU-3** | 33.37% | **40.65%** | **+7.28 percentage points** |
+| **BLEU-4** | 24.50% | **29.33%** | **+4.83 percentage points** |
+| **METEOR** | 37.19% | **44.40%** | **+7.21 percentage points** |
+| **ROUGE-L** | 49.40% | **53.25%** | **+3.85 percentage points** |
 
-| Chỉ số (Metric) | Pretrained BLIP (Exp 1 - Baseline) | Fine-Tuned BLIP (Exp 2 - Flickr8k) | Độ lệch tăng trưởng ($\Delta$) | Mức cải thiện tương đối (%) |
-| :--- | :---: | :---: | :---: | :---: |
-| **BLEU-1** | 68.45% | **75.82%** | **+7.37%** | **+10.77%** |
-| **BLEU-2** | 50.20% | **58.40%** | **+8.20%** | **+16.33%** |
-| **BLEU-3** | 36.15% | **43.90%** | **+7.75%** | **+21.44%** |
-| **BLEU-4** | 25.80% | **33.15%** | **+7.35%** | **+28.49%** |
-| **METEOR** | 24.10% | **29.30%** | **+5.20%** | **+21.58%** |
-| **ROUGE-L** | 52.30% | **59.80%** | **+7.50%** | **+14.34%** |
+*Ghi chú:* Độ chênh lệch được đo bằng điểm phần trăm (percentage points - pp) phản ánh sự gia tăng trực tiếp trên thang điểm chuẩn $0-100\%$.
 
-### 5.2. So Sánh Định Tính Trực Quan (Qualitative Samples)
-| Ảnh (Image) | Ground Truth (5 References) | Pretrained BLIP (Exp 1) | Fine-Tuned BLIP (Exp 2) |
-| :---: | :--- | :--- | :--- |
-| `1056338697_4f7d7ce270.jpg` | • A blond woman in a blue shirt appears to wait for a ride.<br>• A blond woman is on the street hailing a taxi.<br>• A woman is signaling to traffic, as seen from behind.<br>• A woman with blonde hair wearing a blue tube top is waving.<br>• The woman in the blue dress is holding out her arm at oncoming traffic. | `a woman is taking a picture of her car` | `a woman in blue shirt taking a picture of her car` *(Nhận diện thêm thuộc tính thị giác "blue shirt")* |
-| `106490881_5a2dd9b7bd.jpg` | • A boy in his blue swim shorts at the beach.<br>• A boy smiles for the camera at a beach.<br>• A young boy in swimming trunks is walking on the beach.<br>• Children playing on the beach.<br>• The boy is playing on the shore of an ocean. | `a boy standing in the water` | `a young boy playing in the water on the beach` *(Mô tả chính xác hành động và bối cảnh không gian)* |
-| `10815824_2997e03d76.jpg` | • A blonde woman in a bikini is surfing.<br>• A surfer girl rides a wave.<br>• A woman in a pink bikini surfs a wave.<br>• A woman on a surfboard catches a wave.<br>• Girl riding the waves on a surfboard. | `a woman in a bikini riding a wave on a surfboard` | `a woman in pink bikini surfing on a wave` *(Khớp chính xác màu sắc trang phục và động từ thể thao)* |
+### 5.3. Mẫu So Sánh Định Tính Trực Quan (Qualitative Samples)
+*Mẫu trích xuất thực tế từ tập test chính thức `outputs/predictions/full_test_1000.json`:*
 
-### 5.3. Thiết Kế Thí Nghiệm Đảm Bảo Tính Công Bằng Tuyệt Đối (Fairness Guarantees)
+| Ảnh (Image) | Ground Truth (5 References) | Pretrained BLIP (Exp 1) | Fine-Tuned BLIP (Exp 2) | Nhận xét Chuyên Môn |
+| :---: | :--- | :--- | :--- | :--- |
+| `3385593926_d3e9c21170.jpg` | • The dogs are in the snow in front of a fence .<br>• The dogs play on the snow .<br>• Two brown dogs playfully fight in the snow .<br>• Two brown dogs wrestle in the snow .<br>• Two dogs playing in the snow . | `two dogs playing in the snow` | `a couple of dogs playing in the snow` | Cả hai mô hình đều nhận diện chính xác hành vi thực thể trong tuyết |
+| `2677656448_6b7e7702af.jpg` | • a brown and white dog swimming towards some in the pool<br>• A dog in a swimming pool swims toward sombody we cannot see .<br>• A dog swims in a pool near a person .<br>• Small dog is paddling through the water in a pool .<br>• The small brown and white dog is in the pool . | `a man in a swimming pool with a dog` | `a man and a dog in a swimming pool` | Miêu tả chính xác quan hệ không gian thực thể người và chó trong hồ bơi |
+| `311146855_0b65fdb169.jpg` | • A man and a woman in festive costumes dancing .<br>• A man and a woman with feathers on her head dance .<br>• A man and a woman wearing decorative costumes and dancing in a crowd of onlookers .<br>• one performer wearing a feathered headdress dancing with another performer in the streets<br>• Two people are dancing with drums on the right and a crowd behind them . | `a man in a costume` | `a man in a yellow and green costume` | Mô hình fine-tuned bổ sung chi tiết màu sắc cụ thể (`yellow and green`) |
+
+### 5.4. Thiết Kế Thí Nghiệm Đảm Bảo Tính Công Bằng Tuyệt Đối (Fairness Guarantees)
 1. **Zero Data Leakage:** Phân chia tập dữ liệu train/val/test theo chuẩn Karpathy Split nghiêm ngặt. Tập Test (1,000 ảnh) hoàn toàn cô lập, không xuất hiện trong quá trình huấn luyện hay tinh chỉnh siêu tham số.
-2. **Identical Vision Preprocessing:** Cả 2 mô hình đều áp dụng cùng một pipeline tiền xử lý: Bicubic Interpolation về kích thước chuẩn $(384 \times 384)$ px và chuẩn hóa kênh màu theo phân phối ImageNet $(\mu, \sigma)$.
-3. **Controlled Decoding Parameters:** Cùng sử dụng thuật toán **Beam Search** với $k=5$, $\text{max\_length}=32$, $\text{length\_penalty}=1.0$, và $\text{repetition\_penalty}=1.2$.
+2. **Identical Vision Preprocessing:** Cả 2 mô hình đều áp dụng cùng một pipeline tiền xử lý: Bicubic Interpolation về kích thước chuẩn $(384 \times 384)$ px và chuẩn hóa kênh màu theo **BLIP Processor Normalization** ($\mu=[0.481, 0.458, 0.408], \sigma=[0.269, 0.261, 0.276]$).
+3. **Controlled Decoding Parameters:** Cùng sử dụng thuật toán **Beam Search** với $k=3$, $\text{max\_length}=32$.
 4. **Multi-Reference Ground Truths:** Mỗi ảnh test được đối chiếu với đầy đủ 5 câu chú thích của con người để tính toán sự tương đồng ngữ nghĩa chính xác nhất.
 5. **BLEU Smoothing Function:** Áp dụng phương pháp làm mịn Chen & Cherry Smoothing Method 1 để tránh phạt điểm 0 khi câu ngắn không khớp $n$-gram bậc cao.
-6. **Môi trường Đánh giá Đồng nhất:** Chạy trên cùng thiết bị phần cứng (GPU/CPU) và cùng độ chính xác số học (FP16/FP32).
+6. **Môi trường Đánh giá Đồng nhất:** Chạy trên cùng thiết bị phần cứng (CPU) và cùng độ chính xác số học.
+
+### 5.5. Giới Hạn Của Nghiên Cứu (Limitations)
+* **Bản chất của các thước đo tự động (NLP Metrics):** Các chỉ số BLEU, METEOR, ROUGE-L đo lường độ trùng lặp $n$-gram và sự tương đồng cú pháp/ngữ nghĩa giữa câu sinh ra với các câu tham chiếu do con người viết, không thể đánh giá toàn diện mọi sắc thái thẩm mỹ hay tính sáng tạo tự nhiên của ngôn ngữ.
+* **Bản đồ chú ý thị giác (Attention Visualization):** Visual Grounding thông qua Cross-Attention Heatmap là phương pháp phân tích diễn giải mô hình (interpretability analysis), phản ánh mức độ tập trung đặc trưng của Decoder lên các patch thị giác, không phải là ground-truth object localization hay bounding box phát hiện đối tượng chính xác tuyệt đối.
+* **Phạm vi phân phối dữ liệu (Domain Scope):** Toàn bộ kết quả thực nghiệm được đo lường trên tập dữ liệu Flickr8k (chủ yếu xoay quanh các hoạt động thường ngày, con người và động vật ngoại cảnh). Kết quả này đặc thù cho phân phối dữ liệu của Flickr8k và không nên được khái quát hóa thành kết luận tổng quát cho mọi bài toán hay tập dữ liệu image captioning khác.
 
 ---
 
@@ -266,8 +291,10 @@ btl-computer-vision/
 │   ├── figures/                    # 4 biểu đồ phân tích thống kê Flickr8k thật
 │   └── predictions/                # Kết quả caption dự đoán (JSON + TXT)
 ├── outputs/
-│   ├── comparison_report.md        # Báo cáo đối đầu định lượng & định tính chi tiết
-│   └── experiment_comparison_results.json # Dữ liệu thô kết quả so sánh
+│   ├── full_test_1000.json         # Thống kê và metrics đánh giá chính thức (1,000 test images)
+│   ├── predictions/
+│   │   └── full_test_1000.json     # Chi tiết 1,000 predictions & 5,000 ground-truth references
+│   └── comparison_report.md        # Báo cáo đối đầu định lượng & định tính chi tiết
 ├── compare_experiments.py          # Pipeline so sánh thực nghiệm Pretrained vs Fine-Tuned
 ├── dataset_analysis.py             # Script phân tích EDA Flickr8k
 ├── inference.py                    # Wrapper chạy suy luận từ thư mục gốc

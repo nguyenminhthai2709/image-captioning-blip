@@ -63,6 +63,7 @@ class BLIPInferencePipeline:
             self.device = torch.device("cpu")
             logger.info("Device: CPU (CUDA not detected, falling back to CPU)")
 
+        self.model_name = model_name
         logger.info(f"Loading Pretrained BLIP Model: {model_name} ...")
         self.processor: BlipProcessor = BlipProcessor.from_pretrained(model_name)
         self.model: BlipForConditionalGeneration = BlipForConditionalGeneration.from_pretrained(model_name)
@@ -98,8 +99,9 @@ class BLIPInferencePipeline:
                 "Interpolation Method": "Bicubic Interpolation",
                 "Output Tensor Shape [B, C, H, W]": list(pixel_values.shape),
                 "Data Type": str(pixel_values.dtype),
-                "ImageNet Mean (RGB)": [0.48145466, 0.4578275, 0.40821073],
-                "ImageNet Std (RGB)": [0.26862954, 0.26130258, 0.27577711],
+                "BLIP Processor Mean (RGB)": [0.48145466, 0.4578275, 0.40821073],
+                "BLIP Processor Std (RGB)": [0.26862954, 0.26130258, 0.27577711],
+                "Normalization Protocol": "BLIP Processor Normalization (ImageNet-derived parameters)",
                 "Normalized Value Range": f"[{tensor_min:.3f}, {tensor_max:.3f}] (μ={tensor_mean:.3f}, σ={tensor_std:.3f})"
             },
             "3. Vision Transformer (ViT-B/16) Architecture": {
@@ -175,9 +177,14 @@ class BLIPInferencePipeline:
         caption: str = self.processor.decode(output_ids[0], skip_special_tokens=True).strip()
 
         result: Dict[str, Any] = {
+            "image": str(img_file.resolve()),
+            "caption": caption,
+            "model": self.model_name,
+            "device": str(self.device).upper(),
+            "inference_time": round(latency_ms, 2),
+            # Preserved detailed metadata for compatibility
             "image_path": str(img_file.resolve()),
             "image_name": img_file.name,
-            "device": str(self.device).upper(),
             "generated_caption": caption,
             "latency_ms": round(latency_ms, 2),
             "decoding_parameters": {
@@ -204,6 +211,7 @@ class BLIPInferencePipeline:
             with open(txt_file, "w", encoding="utf-8") as f:
                 f.write(
                     f"Image Path:        {img_file.resolve()}\n"
+                    f"Model:             {self.model_name}\n"
                     f"Device:            {self.device}\n"
                     f"Inference Latency: {latency_ms:.2f} ms\n"
                     f"Generated Caption: \"{caption}\"\n"
