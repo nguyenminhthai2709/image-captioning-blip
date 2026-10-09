@@ -1,0 +1,117 @@
+[
+    {
+        "sample_id": "attention_sample_01",
+        "image": "3482062809_3b694322c4.jpg",
+        "category": "Person / Object Grounding",
+        "generated_caption": "a group of people sitting on a bench in front of a statue of a soldier",
+        "analyzed_token_or_word": "statue",
+        "tokens": [
+            "statue"
+        ],
+        "token_indices": [
+            13
+        ],
+        "attention_layers": [
+            8,
+            9,
+            10,
+            11
+        ],
+        "attention_heads": 12,
+        "attention_grid": "24x24 (576 visual patches)",
+        "visualization_file": "results/figures/visual_grounding/attention_sample_01.png",
+        "observation": "The cross-attention visualization places relatively higher attention weight on the visual patches corresponding to the living statue performer standing on the platform when generating the token 'statue'."
+    },
+    {
+        "sample_id": "attention_sample_02",
+        "image": "280706862_14c30d734a.jpg",
+        "category": "Animal / Object Attribute Grounding",
+        "generated_caption": "a black dog with a white ball in it ' s mouth",
+        "analyzed_token_or_word": "ball",
+        "tokens": [
+            "ball"
+        ],
+        "token_indices": [
+            7
+        ],
+        "attention_layers": [
+            8,
+            9,
+            10,
+            11
+        ],
+        "attention_heads": 12,
+        "attention_grid": "24x24 (576 visual patches)",
+        "visualization_file": "results/figures/visual_grounding/attention_sample_02.png",
+        "observation": "The cross-attention visualization shows relatively concentrated attention around the dog's mouth and the white object region when decoding the token 'ball'."
+    },
+    {
+        "sample_id": "attention_sample_03",
+        "image": "3110649716_c17e14670e.jpg",
+        "category": "Action / Interaction Grounding",
+        "generated_caption": "a man in a green jacket is helping another man in a black jacket",
+        "analyzed_token_or_word": "helping",
+        "tokens": [
+            "helping"
+        ],
+        "token_indices": [
+            8
+        ],
+        "attention_layers": [
+            8,
+            9,
+            10,
+            11
+        ],
+        "attention_heads": 12,
+        "attention_grid": "24x24 (576 visual patches)",
+        "visualization_file": "results/figures/visual_grounding/attention_sample_03.png",
+        "observation": "When generating the action verb 'helping', the attention distribution is focused on the central interaction zone where the two individuals' arms and upper bodies meet."
+    },
+    {
+        "sample_id": "attention_sample_04",
+        "image": "3100251515_c68027cc22.jpg",
+        "category": "Scene / Context Object Grounding",
+        "generated_caption": "a group of people holding signs in the street",
+        "analyzed_token_or_word": "signs",
+        "tokens": [
+            "signs"
+        ],
+        "token_indices": [
+            6
+        ],
+        "attention_layers": [
+            8,
+            9,
+            10,
+            11
+        ],
+        "attention_heads": 12,
+        "attention_grid": "24x24 (576 visual patches)",
+        "visualization_file": "results/figures/visual_grounding/attention_sample_04.png",
+        "observation": "During generation of the plural noun 'signs', cross-attention is elevated across the upper-middle spatial region where protest signs and banners are held aloft."
+    },
+    {
+        "sample_id": "attention_sample_05",
+        "image": "1258913059_07c613f7ff.jpg",
+        "category": "Ambiguous / Limitation Case",
+        "generated_caption": "a red white and blue building",
+        "analyzed_token_or_word": "building",
+        "tokens": [
+            "building"
+        ],
+        "token_indices": [
+            6
+        ],
+        "attention_layers": [
+            8,
+            9,
+            10,
+            11
+        ],
+        "attention_heads": 12,
+        "attention_grid": "24x24 (576 visual patches)",
+        "visualization_file": "results/figures/visual_grounding/attention_sample_05.png",
+        "observation": "Attention is broadly distributed across the large patterned Union Jack facade in the background, showing how strong background visual textures can dominate decoder attention over foreground subjects."
+    }
+]

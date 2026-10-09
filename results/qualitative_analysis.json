@@ -1,0 +1,92 @@
+[
+    {
+        "sample_id": "sample_01",
+        "image": "3482062809_3b694322c4.jpg",
+        "category": "Clear improvement (Scene / Entity recognition)",
+        "selection_reason": "Fine-tuned caption accurately identifies the statue, bench, and group of people, correcting the pretrained model's false detection of a skateboarder.",
+        "references": [
+            "A group of tourists stand around as a lady puts her hand near the mouth of a statue .",
+            "A woman is making a statue pretend to kiss her hand beside four boys at a bench .",
+            "A woman posing with a statue alongside a group of boys",
+            "A woman with a backpack leans again a statue while a group of boys sit on a bench talking .",
+            "Woman gets her hand kissed by living statue street artist ."
+        ],
+        "pretrained_caption": "a man on a skateboard",
+        "fine_tuned_caption": "a group of people sitting on a bench in front of a statue of a soldier"
+    },
+    {
+        "sample_id": "sample_02",
+        "image": "280706862_14c30d734a.jpg",
+        "category": "Object recognition improvement",
+        "selection_reason": "Fine-tuned caption specifies the object being carried (white ball), whereas the pretrained caption only describes the dog color.",
+        "references": [
+            "A black dog emerges from the water onto the sand , holding a white object in its mouth .",
+            "A black dog emerges from the water with a white ball in its mouth .",
+            "A black dog on a beach carrying a ball in its mouth .",
+            "a black dog walking out of the water with a white ball in his mouth .",
+            "The black dog jumps out of the water with something in its mouth ."
+        ],
+        "pretrained_caption": "the dog is black",
+        "fine_tuned_caption": "a black dog with a white ball in it ' s mouth"
+    },
+    {
+        "sample_id": "sample_03",
+        "image": "3110649716_c17e14670e.jpg",
+        "category": "Action / Interaction improvement",
+        "selection_reason": "Fine-tuned caption captures the interactive action between the two individuals rather than just describing clothing.",
+        "references": [
+            "A man helps another man tie a red ribbon onto his arm .",
+            "A man helps tie a red ribbon around another man 's right arm during a street parade .",
+            "A man is tying a red arm band around another mans arm in the street .",
+            "One man helps another attach a red ribbon to his forearm in the midst of a large group of people .",
+            "Two men stand together ; one is putting something red on his arm ."
+        ],
+        "pretrained_caption": "a man wearing a green jacket",
+        "fine_tuned_caption": "a man in a green jacket is helping another man in a black jacket"
+    },
+    {
+        "sample_id": "sample_04",
+        "image": "3100251515_c68027cc22.jpg",
+        "category": "Scene / Context improvement",
+        "selection_reason": "Fine-tuned caption provides contextual detail regarding the signs and street setting, whereas pretrained caption is overly generic.",
+        "references": [
+            "A crowd of people wearing jackets and holding signs .",
+            "A group of protesters picket in the road .",
+            "A large \" green \" peaceful protest is taken to the streets .",
+            "A protest march is passing by a white stone building .",
+            "Group of people walking with posters ."
+        ],
+        "pretrained_caption": "a crowd of people",
+        "fine_tuned_caption": "a group of people holding signs in the street"
+    },
+    {
+        "sample_id": "sample_05",
+        "image": "3072172967_630e9c69d0.jpg",
+        "category": "Similar performance",
+        "selection_reason": "Both models generate identical and accurate descriptions of the basketball game.",
+        "references": [
+            "A player from the white and green highschool team dribbles down court defended by a player from the other team .",
+            "Four basketball players in action .",
+            "Four men playing basketball , two from each team .",
+            "Two boys in green and white uniforms play basketball with two boys in blue and white uniforms .",
+            "Young men playing basketball in a competition ."
+        ],
+        "pretrained_caption": "a group of men playing a game of basketball",
+        "fine_tuned_caption": "a group of men playing a game of basketball"
+    },
+    {
+        "sample_id": "sample_06",
+        "image": "1258913059_07c613f7ff.jpg",
+        "category": "Failure / Limitation case",
+        "selection_reason": "Both models focus solely on the background painted building and fail to mention the people sitting at the picnic table.",
+        "references": [
+            "A couple of people sit outdoors at a table with an umbrella and talk .",
+            "Three people are sitting at an outside picnic bench with an umbrella .",
+            "Three people sit at an outdoor cafe .",
+            "Three people sit at an outdoor table in front of a building painted like the Union Jack .",
+            "Three people sit at a picnic table outside of a building painted like a union jack ."
+        ],
+        "pretrained_caption": "a red, white, and blue building",
+        "fine_tuned_caption": "a red white and blue building"
+    }
+]
