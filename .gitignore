@@ -44,11 +44,30 @@ checkpoints/
 *.ckpt
 *.onnx
 
-# Outputs & Logs
+# Outputs & Logs (Ignore logs and general outputs by default)
 logs/
-outputs/
+outputs/*
+!outputs/full_test_1000.json
+!outputs/vit_gpt2_test_1000.json
+!outputs/predictions/
+outputs/predictions/*
+!outputs/predictions/full_test_1000.json
+!outputs/predictions/vit_gpt2_test_1000.json
 .tensorboard/
 *.log
+
+# Cache & Hugging Face Hub downloads
+.cache/
+hf_cache/
+*/.cache/*
+*.incomplete
+
+# Secrets, Environment & API Keys
+.env
+.env.*
+secrets.*
+*.key
+*.pem
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/

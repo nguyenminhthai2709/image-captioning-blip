@@ -1,0 +1,51 @@
+{
+    "dataset": "Flickr8k",
+    "test_split_file": "data/flickr8k/splits/Flickr_8k.testImages.txt",
+    "num_test_images": 1000,
+    "references_per_image": 5,
+    "total_references": 5000,
+    "models": {
+        "pretrained": "Salesforce/blip-image-captioning-base",
+        "fine_tuned": "checkpoints/frozen_vision/best_model/"
+    },
+    "decoding": {
+        "method": "beam_search",
+        "num_beams": 3,
+        "max_length": 32
+    },
+    "failed_images": 0,
+    "nan_metrics_count": 0,
+    "total_runtime_seconds": 5742.63,
+    "pretrained": {
+        "BLEU-1": 58.99,
+        "BLEU-2": 45.08,
+        "BLEU-3": 33.37,
+        "BLEU-4": 24.5,
+        "METEOR": 37.19,
+        "ROUGE-L": 49.4
+    },
+    "fine_tuned": {
+        "BLEU-1": 71.15,
+        "BLEU-2": 54.86,
+        "BLEU-3": 40.65,
+        "BLEU-4": 29.33,
+        "METEOR": 44.4,
+        "ROUGE-L": 53.25
+    },
+    "absolute_differences": {
+        "BLEU-1": 12.16,
+        "BLEU-2": 9.78,
+        "BLEU-3": 7.28,
+        "BLEU-4": 4.83,
+        "METEOR": 7.21,
+        "ROUGE-L": 3.85
+    },
+    "percentage_point_differences": {
+        "BLEU-1": "+12.16%",
+        "BLEU-2": "+9.78%",
+        "BLEU-3": "+7.28%",
+        "BLEU-4": "+4.83%",
+        "METEOR": "+7.21%",
+        "ROUGE-L": "+3.85%"
+    }
+}

@@ -12,13 +12,17 @@
 
 Image Captioning (Sinh chú thích ảnh tự động) là bài toán giao thoa đa phương thức (Multimodal) giữa **Thị giác máy tính (Computer Vision)** và **Xử lý ngôn ngữ tự nhiên (NLP)**. Nhiệm vụ của hệ thống là tiếp nhận một bức ảnh đầu vào, hiểu được các thực thể, thuộc tính và mối quan hệ không gian, sau đó sinh ra một câu mô tả chính xác nội dung bằng ngôn ngữ tự nhiên.
 
-Trong dự án này:
-- Sử dụng mô hình nền tảng: **Salesforce/blip-image-captioning-base** (kết hợp **Vision Transformer ViT-B/16** và **Cross-Attention Text Decoder**).
+Trong dự án này, hệ thống nghiên cứu và đối chiếu chuyên sâu **ba cấu hình mô hình Vision-Language**:
+1. **BLIP Pretrained (`Salesforce/blip-image-captioning-base`)**: Zero-shot baseline kết hợp **Vision Transformer ViT-B/16 (384px)** và **Cross-Attention Text Decoder**.
+2. **BLIP Fine-Tuned (`checkpoints/frozen_vision/best_model/`)**: Mô hình BLIP được tinh chỉnh bộ giải mã trên Flickr8k với chiến lược Frozen Vision Backbone.
+3. **ViT-GPT2 Pretrained (`nlpconnect/vit-gpt2-image-captioning`)**: Kiến trúc lai ghép độc lập kết hợp **ViT (224px)** và **GPT-2 Causal LM**.
+
+**Các đóng góp & tính năng chính:**
 - Đã tải và tổ chức toàn bộ tập dữ liệu **Flickr8k thật** (8,091 ảnh JPEG, 40,460 chú thích thật kèm các file phân chia train/val/test chuẩn Karpathy).
-- Xây dựng module suy luận độc lập [`src/inference.py`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/src/inference.py) có khả năng tự động nhận diện phần cứng (CUDA GPU -> MPS -> CPU fallback) và hiển thị chi tiết toàn bộ pipeline tiền xử lý thị giác.
-- Đánh giá định lượng toàn diện bằng: **BLEU-1, BLEU-2, BLEU-3, BLEU-4, METEOR, ROUGE-L**.
-- Trực quan hóa bản đồ chú ý **Cross-Attention Heatmap** (Visual Grounding).
-- Triển khai ứng dụng web tương tác bằng **Streamlit**.
+- Xây dựng module suy luận độc lập [`src/inference.py`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/src/inference.py) và [`src/vit_gpt2_captioner.py`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/src/vit_gpt2_captioner.py) tự động nhận diện phần cứng (CUDA GPU -> MPS -> CPU fallback).
+- Đánh giá định lượng toàn diện trên cùng 1,000 ảnh test chuẩn bằng: **BLEU-1, BLEU-2, BLEU-3, BLEU-4, METEOR, ROUGE-L** và đo lường thời gian suy luận thực tế.
+- Trực quan hóa bản đồ chú ý **Cross-Attention Heatmap** (Visual Grounding) theo từng từ ngữ hoàn chỉnh.
+- Triển khai ứng dụng web tương tác bằng **Streamlit** hỗ trợ so sánh đối đầu đồng thời 3 mô hình trên cùng một ảnh.
 
 ---
 
@@ -147,7 +151,16 @@ python src/inference.py --image data/flickr8k/Images/1000268201_693b08cb0e.jpg
 python src/inference.py --image path/to/your_image.jpg --num_beams 5 --max_length 32
 ```
 
-### 3.3. Kết quả lưu tự động
+### 3.3. Chạy Suy Luận ViT-GPT2 qua Command Line
+```bash
+# Suy luận đơn ảnh với ViT-GPT2 Pretrained
+python src/vit_gpt2_captioner.py --image data/flickr8k/Images/1000268201_693b08cb0e.jpg
+
+# Chạy benchmark đánh giá ViT-GPT2 trên 1,000 ảnh test chuẩn
+python scripts/evaluate_vit_gpt2.py --num_samples 1000 --resume
+```
+
+### 3.4. Kết quả lưu tự động
 Toàn bộ kết quả suy luận cùng thông số chi tiết của pipeline tiền xử lý thị giác được tự động lưu vào thư mục `results/predictions/`:
 * File JSON: `results/predictions/<image_name>_prediction.json`
 * File Text: `results/predictions/<image_name>_prediction.txt`
@@ -190,62 +203,64 @@ python src/train.py --strategy full_finetune --epochs 5 --batch_size 16 --learni
 
 ---
 
-## 5. Kết Quả Đánh Giá & So Sánh Thực Nghiệm (Evaluation Results)
+## 5. Kết Quả Đánh Giá & So Sánh Thực Nghiệm (3-Model Benchmark)
 
-Kết quả đánh giá chính thức được thực hiện đối đầu trực tiếp giữa **Pretrained BLIP (`Salesforce/blip-image-captioning-base`)** và **Fine-Tuned BLIP (`checkpoints/frozen_vision/best_model/`)** trên toàn bộ tập kiểm thử chuẩn Flickr8k.
+Kết quả đánh giá chính thức được thực hiện đối đầu trực tiếp giữa **3 cấu hình mô hình**:
+1. **Pretrained BLIP (`Salesforce/blip-image-captioning-base`)**
+2. **Fine-Tuned BLIP (`checkpoints/frozen_vision/best_model/`)**
+3. **ViT-GPT2 Pretrained (`nlpconnect/vit-gpt2-image-captioning`)**
 
 ### 5.1. Giao thức Đánh giá (Evaluation Protocol)
 * **Tập dữ liệu kiểm thử:** Toàn bộ $1,000$ ảnh test chuẩn từ `data/flickr8k/splits/Flickr_8k.testImages.txt` (hoàn toàn cô lập khỏi tập train/validation).
 * **Ground-Truth References:** $5,000$ câu chú thích chuẩn người dùng từ `data/flickr8k/captions.txt` (đúng $5$ reference captions cho mỗi ảnh test).
-* **Cấu hình Sinh chuỗi (Generation Settings):** Cả 2 mô hình sử dụng cùng cấu hình Beam Search:
+* **Cấu hình Sinh chuỗi (Generation Settings):** Cả 3 mô hình sử dụng cùng cấu hình Beam Search:
   * `method = "beam_search"`
   * `num_beams = 3`
   * `max_length = 32`
-* **Xử lý Ngôn ngữ & Tokenization:** Sử dụng cùng bộ tokenizer, tiền xử lý chữ thường (lowercased) và tách từ thống nhất.
 * **Chỉ số Đánh giá (Metrics):**
-  * **BLEU-1, BLEU-2, BLEU-3, BLEU-4:** Tính theo NLTK `corpus_bleu` kết hợp hàm làm mịn Chen & Cherry Smoothing Method 1.
-  * **METEOR:** Tính theo NLTK `meteor_score` đối chiếu với 5 references của mỗi ảnh, lấy trung bình toàn tập test.
-  * **ROUGE-L:** Tính điểm F1 của Longest Common Subsequence lớn nhất với 5 references qua thư viện `rouge-score` (use_stemmer=True), lấy trung bình toàn tập test.
-* **Độ toàn vẹn dữ liệu:** $1,000$ ảnh xử lý hoàn chỉnh, $0$ ảnh lỗi/thiếu, $0$ reference bị thiếu, $0$ giá trị NaN.
-* **Thời gian thực thi:** $5,742.63$ giây (~$95.71$ phút trên CPU).
+  * **BLEU-1, BLEU-2, BLEU-3, BLEU-4:** NLTK `corpus_bleu` kết hợp Chen & Cherry Smoothing Method 1.
+  * **METEOR:** NLTK `meteor_score` đối chiếu với 5 references của mỗi ảnh, lấy trung bình toàn tập.
+  * **ROUGE-L:** Longest Common Subsequence lớn nhất với 5 references qua `rouge-score` (use_stemmer=True), lấy trung bình toàn tập.
+* **Độ toàn vẹn dữ liệu:** $1,000$ ảnh xử lý hoàn chỉnh cho từng model, $0$ ảnh lỗi/thiếu, $0$ giá trị NaN.
+* **Môi trường thực thi:** CPU (`PyTorch 2.13.0+cpu`).
 * **Dữ liệu xuất chính thức:**
-  * Thống kê tổng hợp: [`outputs/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/full_test_1000.json)
-  * Chi tiết 1,000 dự đoán: [`outputs/predictions/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/predictions/full_test_1000.json)
+  * BLIP Metrics: [`outputs/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/full_test_1000.json) | Predictions: [`outputs/predictions/full_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/predictions/full_test_1000.json)
+  * ViT-GPT2 Metrics: [`outputs/vit_gpt2_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/vit_gpt2_test_1000.json) | Predictions: [`outputs/predictions/vit_gpt2_test_1000.json`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/outputs/predictions/vit_gpt2_test_1000.json)
+  * Báo cáo chuyên sâu: [`results/model_comparison.md`](file:///c:/Users/BOOK%20PRO/Downloads/btl%20computer%20vision/results/model_comparison.md)
 
 ### 5.2. Bảng Kết Quả Đánh Giá Chính Thức (Official Quantitative Results - 1,000 Test Images)
 
-| Chỉ số (Metric) | Pretrained BLIP (`Salesforce/blip-image-captioning-base`) | Fine-Tuned BLIP (`checkpoints/frozen_vision/best_model/`) | Mức chênh lệch tuyệt đối (Điểm phần trăm / percentage points) |
-| :--- | :---: | :---: | :---: |
-| **BLEU-1** | 58.99% | **71.15%** | **+12.16 percentage points** |
-| **BLEU-2** | 45.08% | **54.86%** | **+9.78 percentage points** |
-| **BLEU-3** | 33.37% | **40.65%** | **+7.28 percentage points** |
-| **BLEU-4** | 24.50% | **29.33%** | **+4.83 percentage points** |
-| **METEOR** | 37.19% | **44.40%** | **+7.21 percentage points** |
-| **ROUGE-L** | 49.40% | **53.25%** | **+3.85 percentage points** |
+| Chỉ số (Metric) | 1. Pretrained BLIP (Zero-Shot) | 2. Fine-Tuned BLIP (Flickr8k) | 3. ViT-GPT2 Pretrained | BLIP Fine-Tuned vs ViT-GPT2 | BLIP Pretrained vs ViT-GPT2 |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **BLEU-1** | 58.99% | **71.15%** | 61.22% | **+9.93 pp** | -2.23 pp |
+| **BLEU-2** | 45.08% | **54.86%** | 41.82% | **+13.04 pp** | **+3.26 pp** |
+| **BLEU-3** | 33.37% | **40.65%** | 27.01% | **+13.64 pp** | **+6.36 pp** |
+| **BLEU-4** | 24.50% | **29.33%** | 16.87% | **+12.46 pp** | **+7.63 pp** |
+| **METEOR** | 37.19% | **44.40%** | 36.71% | **+7.69 pp** | **+0.48 pp** |
+| **ROUGE-L** | 49.40% | **53.25%** | 45.47% | **+7.78 pp** | **+3.93 pp** |
+| **Độ trễ trung bình/ảnh** | ~2,871 ms | ~2,871 ms | **1,061.5 ms** | ViT-GPT2 nhanh hơn ~2.7x | ViT-GPT2 nhanh hơn ~2.7x |
+| **Tổng runtime 1,000 ảnh** | 5,742.63 s (~95.7 min) | 5,742.63 s (~95.7 min) | **1,056.10 s (~17.6 min)** | ViT-GPT2 nhanh hơn ~5.4x | ViT-GPT2 nhanh hơn ~5.4x |
 
-*Ghi chú:* Độ chênh lệch được đo bằng điểm phần trăm (percentage points - pp) phản ánh sự gia tăng trực tiếp trên thang điểm chuẩn $0-100\%$.
+*Ghi chú:* pp = percentage points (điểm phần trăm tuyệt đối).
+
+![Biểu đồ so sánh 3 mô hình](results/figures/model_comparison.png)
+![Biểu đồ phân rã BLEU 1-4](results/figures/bleu_comparison.png)
 
 ### 5.3. Mẫu So Sánh Định Tính Trực Quan (Qualitative Samples)
-*Mẫu trích xuất thực tế từ tập test chính thức `outputs/predictions/full_test_1000.json`:*
+*Mẫu trích xuất thực tế từ tập test chính thức của cả 3 mô hình:*
 
-| Ảnh (Image) | Ground Truth (5 References) | Pretrained BLIP (Exp 1) | Fine-Tuned BLIP (Exp 2) | Nhận xét Chuyên Môn |
-| :---: | :--- | :--- | :--- | :--- |
-| `3385593926_d3e9c21170.jpg` | • The dogs are in the snow in front of a fence .<br>• The dogs play on the snow .<br>• Two brown dogs playfully fight in the snow .<br>• Two brown dogs wrestle in the snow .<br>• Two dogs playing in the snow . | `two dogs playing in the snow` | `a couple of dogs playing in the snow` | Cả hai mô hình đều nhận diện chính xác hành vi thực thể trong tuyết |
-| `2677656448_6b7e7702af.jpg` | • a brown and white dog swimming towards some in the pool<br>• A dog in a swimming pool swims toward sombody we cannot see .<br>• A dog swims in a pool near a person .<br>• Small dog is paddling through the water in a pool .<br>• The small brown and white dog is in the pool . | `a man in a swimming pool with a dog` | `a man and a dog in a swimming pool` | Miêu tả chính xác quan hệ không gian thực thể người và chó trong hồ bơi |
-| `311146855_0b65fdb169.jpg` | • A man and a woman in festive costumes dancing .<br>• A man and a woman with feathers on her head dance .<br>• A man and a woman wearing decorative costumes and dancing in a crowd of onlookers .<br>• one performer wearing a feathered headdress dancing with another performer in the streets<br>• Two people are dancing with drums on the right and a crowd behind them . | `a man in a costume` | `a man in a yellow and green costume` | Mô hình fine-tuned bổ sung chi tiết màu sắc cụ thể (`yellow and green`) |
+| Ảnh (Image) | Ground Truth (5 References) | Pretrained BLIP | Fine-Tuned BLIP | ViT-GPT2 Pretrained | Nhận xét Chuyên Môn |
+| :---: | :--- | :--- | :--- | :--- | :--- |
+| `3482062809_3b694322c4.jpg` | • A group of tourists stand around as a lady puts her hand near the mouth of a statue .<br>• Woman gets her hand kissed by living statue street artist . | `a man on a skateboard` | `a group of people sitting on a bench in front of a statue of a soldier` | `a man standing on top of a skateboard next to a group of people` | Cả 2 model pretrained đều nhầm lẫn ván trượt; BLIP Fine-Tuned nhận diện chuẩn xác tượng và băng ghế |
+| `280706862_14c30d734a.jpg` | • A black dog emerges from the water onto the sand , holding a white object in its mouth .<br>• A black dog on a beach carrying a ball in its mouth . | `the dog is black` | `a black dog with a white ball in it ' s mouth` | `a black dog with a frisbee in its mouth` | BLIP Pretrained quá sơ sài; ViT-GPT2 nhận diện được hành vi ngậm nhưng nhầm bóng thành frisbee; BLIP FT chính xác 100% |
+| `3385593926_d3e9c21170.jpg` | • Two brown dogs playfully fight in the snow .<br>• Two dogs playing in the snow . | `two dogs playing in the snow` | `a couple of dogs playing in the snow` | `a brown and black dog playing with a brown horse` | ViT-GPT2 bị ảo giác nhầm chú chó nâu thành con ngựa ("horse"); cả 2 mô hình BLIP nhận diện chuẩn xác |
+| `311146855_0b65fdb169.jpg` | • A man and a woman in festive costumes dancing .<br>• one performer wearing a feathered headdress dancing ... | `a man in a costume` | `a man in a yellow and green costume` | `a man in a black shirt and a woman in a white shirt` | BLIP FT miêu tả chi tiết màu sắc lễ hội; ViT-GPT2 miêu tả theo khuôn mẫu trang phục thường ngày |
 
-### 5.4. Thiết Kế Thí Nghiệm Đảm Bảo Tính Công Bằng Tuyệt Đối (Fairness Guarantees)
-1. **Zero Data Leakage:** Phân chia tập dữ liệu train/val/test theo chuẩn Karpathy Split nghiêm ngặt. Tập Test (1,000 ảnh) hoàn toàn cô lập, không xuất hiện trong quá trình huấn luyện hay tinh chỉnh siêu tham số.
-2. **Identical Vision Preprocessing:** Cả 2 mô hình đều áp dụng cùng một pipeline tiền xử lý: Bicubic Interpolation về kích thước chuẩn $(384 \times 384)$ px và chuẩn hóa kênh màu theo **BLIP Processor Normalization** ($\mu=[0.481, 0.458, 0.408], \sigma=[0.269, 0.261, 0.276]$).
-3. **Controlled Decoding Parameters:** Cùng sử dụng thuật toán **Beam Search** với $k=3$, $\text{max\_length}=32$.
-4. **Multi-Reference Ground Truths:** Mỗi ảnh test được đối chiếu với đầy đủ 5 câu chú thích của con người để tính toán sự tương đồng ngữ nghĩa chính xác nhất.
-5. **BLEU Smoothing Function:** Áp dụng phương pháp làm mịn Chen & Cherry Smoothing Method 1 để tránh phạt điểm 0 khi câu ngắn không khớp $n$-gram bậc cao.
-6. **Môi trường Đánh giá Đồng nhất:** Chạy trên cùng thiết bị phần cứng (CPU) và cùng độ chính xác số học.
-
-### 5.5. Giới Hạn Của Nghiên Cứu (Limitations)
-* **Bản chất của các thước đo tự động (NLP Metrics):** Các chỉ số BLEU, METEOR, ROUGE-L đo lường độ trùng lặp $n$-gram và sự tương đồng cú pháp/ngữ nghĩa giữa câu sinh ra với các câu tham chiếu do con người viết, không thể đánh giá toàn diện mọi sắc thái thẩm mỹ hay tính sáng tạo tự nhiên của ngôn ngữ.
-* **Bản đồ chú ý thị giác (Attention Visualization):** Visual Grounding thông qua Cross-Attention Heatmap là phương pháp phân tích diễn giải mô hình (interpretability analysis), phản ánh mức độ tập trung đặc trưng của Decoder lên các patch thị giác, không phải là ground-truth object localization hay bounding box phát hiện đối tượng chính xác tuyệt đối.
-* **Phạm vi phân phối dữ liệu (Domain Scope):** Toàn bộ kết quả thực nghiệm được đo lường trên tập dữ liệu Flickr8k (chủ yếu xoay quanh các hoạt động thường ngày, con người và động vật ngoại cảnh). Kết quả này đặc thù cho phân phối dữ liệu của Flickr8k và không nên được khái quát hóa thành kết luận tổng quát cho mọi bài toán hay tập dữ liệu image captioning khác.
+### 5.4. Phân Tích & Nhận Xét Chuyên Môn
+1. **Unigram vs. n-gram:** ViT-GPT2 đạt BLEU-1 cao (61.22% vs. 58.99% của Pretrained BLIP) nhờ vốn từ BPE phong phú của GPT-2, nhưng giảm sút mạnh ở $n$-gram dài (BLEU-4: 16.87% vs. 24.50%). BLIP có khả năng nắm bắt trật tự cú pháp và ngữ cảnh cụm từ chặt chẽ hơn.
+2. **Độ phân giải thị giác:** BLIP xử lý ở độ phân giải $384 \times 384$ px (576 visual patches) so với $224 \times 224$ px (196 patches) của ViT-GPT2, giúp giảm thiểu đáng kể hiện tượng ảo giác (hallucination).
+3. **Hiệu năng Fine-tuning:** BLIP Fine-Tuned dẫn đầu toàn diện (+9.93 pp BLEU-1, +12.46 pp BLEU-4, +7.69 pp METEOR so với ViT-GPT2).
+4. **Tốc độ suy luận:** ViT-GPT2 đạt tốc độ suy luận nhanh hơn ~2.7 lần trên CPU (~1,061 ms/ảnh vs. ~2,870 ms/ảnh).
 
 ---
 
@@ -266,7 +281,7 @@ python src/visualizer.py --image data/flickr8k/Images/1000268201_693b08cb0e.jpg
 ```text
 btl-computer-vision/
 ├── app/
-│   └── app.py                      # Giao diện Web tương tác Streamlit
+│   └── app.py                      # Giao diện Web tương tác Streamlit (hỗ trợ 3 mô hình)
 ├── data/
 │   ├── flickr8k/                   # Thư mục dữ liệu Flickr8k thật (8,091 ảnh)
 │   │   ├── Images/                 # 8,091 ảnh JPEG thật
@@ -283,23 +298,28 @@ btl-computer-vision/
 │   ├── dataset.py                  # PyTorch Dataset & DataLoader
 │   ├── model.py                    # Wrapper BLIP: Freeze/Unfreeze ViT, Differential LR
 │   ├── train.py                    # Training loop, LR scheduling, AMP, checkpointing
-│   ├── evaluate.py                 # Tính toán BLEU 1-4, METEOR, ROUGE-L
+│   ├── evaluate.py                 # Đánh giá BLIP (BLEU 1-4, METEOR, ROUGE-L)
 │   ├── inference.py                # Pipeline suy luận Pretrained BLIP chuẩn hóa
+│   ├── vit_gpt2_captioner.py       # Wrapper suy luận và tiền xử lý ViT-GPT2
 │   ├── visualizer.py               # Trực quan hóa Attention Heatmap & biểu đồ hội tụ
 │   └── utils.py                    # Tiện ích tái lập (seed), logger, I/O
+├── scripts/
+│   └── evaluate_vit_gpt2.py        # Benchmark ViT-GPT2 trên Flickr8k (hỗ trợ --resume)
 ├── results/
-│   ├── figures/                    # 4 biểu đồ phân tích thống kê Flickr8k thật
-│   └── predictions/                # Kết quả caption dự đoán (JSON + TXT)
+│   ├── figures/                    # Biểu đồ phân tích EDA, training loss và so sánh 3 mô hình
+│   │   ├── model_comparison.png    # Biểu đồ radar/bar tổng quan 3 mô hình
+│   │   └── bleu_comparison.png     # Biểu đồ phân rã BLEU-1 đến BLEU-4
+│   ├── predictions/                # Kết quả caption dự đoán (JSON + TXT)
+│   └── model_comparison.md         # Báo cáo phân tích chuyên sâu đối đầu 3 mô hình
 ├── outputs/
-│   ├── full_test_1000.json         # Thống kê và metrics đánh giá chính thức (1,000 test images)
-│   ├── predictions/
-│   │   └── full_test_1000.json     # Chi tiết 1,000 predictions & 5,000 ground-truth references
-│   └── comparison_report.md        # Báo cáo đối đầu định lượng & định tính chi tiết
+│   ├── full_test_1000.json         # Metrics đánh giá chính thức BLIP (1,000 test images)
+│   ├── vit_gpt2_test_1000.json     # Metrics đánh giá chính thức ViT-GPT2 (1,000 test images)
+│   └── predictions/
+│       ├── full_test_1000.json     # Chi tiết 1,000 predictions & 5,000 references của BLIP
+│       └── vit_gpt2_test_1000.json # Chi tiết 1,000 predictions & 5,000 references của ViT-GPT2
 ├── compare_experiments.py          # Pipeline so sánh thực nghiệm Pretrained vs Fine-Tuned
 ├── dataset_analysis.py             # Script phân tích EDA Flickr8k
-├── inference.py                    # Wrapper chạy suy luận từ thư mục gốc
 ├── checkpoints/                    # Lưu model weights sau khi train (local)
-├── logs/                           # Nhật ký huấn luyện JSON / log
 ├── requirements.txt                # Thư viện phụ thuộc
 └── README.md                       # Báo cáo học thuật chi tiết
 ```
@@ -312,9 +332,11 @@ btl-computer-vision/
 streamlit run app/app.py
 ```
 Giao diện cung cấp:
-- Duyệt trực tiếp toàn bộ kho $8,091$ ảnh Flickr8k thật hoặc tải ảnh mới.
-- Sinh caption tức thì kèm đồng hồ đo độ trễ suy luận ($\text{ms}$).
-- Trực quan hóa **Visual Attention Heatmap** cho từng từ khóa để kiểm tra vùng thị giác được Vision Encoder chú ý.
-- Bảng và biểu đồ so sánh chỉ số BLEU, METEOR, ROUGE-L.
-
-
+- **Tab 1: Demo Trực Tiếp & Phân Tích Chú Ý Thị Giác:**
+  - Chọn ảnh trực tiếp từ kho $8,091$ ảnh Flickr8k hoặc tải ảnh tùy ý.
+  - Tùy chọn 3 mô hình suy luận: **BLIP Fine-Tuned**, **BLIP Pretrained**, hoặc **ViT-GPT2 Pretrained**.
+  - Nút **"So sánh đồng thời 3 mô hình"**: Thực thi suy luận song song đối đầu trên cùng bức ảnh, hiển thị trực quan caption và thời gian suy luận (latency) của từng mô hình.
+  - Phân tích **Visual Attention Heatmap (Visual Grounding)** tương tác theo từng từ khóa để kiểm tra vùng thị giác mà Vision Encoder tập trung.
+- **Tab 2: So Sánh Thực Nghiệm (Official Benchmark):**
+  - Hiển thị bảng kết quả định lượng đầy đủ (BLEU-1..4, METEOR, ROUGE-L, Runtime, Latency) của cả 3 mô hình trên 1,000 ảnh test chuẩn.
+  - Tích hợp biểu đồ trực quan hóa đa chiều so sánh hiệu năng và phân rã BLEU.

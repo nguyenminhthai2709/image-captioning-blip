@@ -1,0 +1,26 @@
+{
+    "model": "nlpconnect/vit-gpt2-image-captioning",
+    "architecture": "VisionEncoderDecoder (ViT + GPT-2)",
+    "dataset": "Flickr8k",
+    "test_split_file": "data\\flickr8k\\splits\\Flickr_8k.testImages.txt",
+    "num_test_images": 1000,
+    "references_per_image": 5,
+    "total_references": 5000,
+    "failed_images": 0,
+    "device": "cpu",
+    "decoding": {
+        "method": "beam_search",
+        "num_beams": 3,
+        "max_length": 32
+    },
+    "total_runtime_seconds": 1056.1,
+    "avg_latency_ms_per_image": 1061.5,
+    "metrics": {
+        "BLEU-1": 61.22,
+        "BLEU-2": 41.82,
+        "BLEU-3": 27.01,
+        "BLEU-4": 16.87,
+        "METEOR": 36.71,
+        "ROUGE-L": 45.47
+    }
+}
